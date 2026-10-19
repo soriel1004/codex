@@ -58,9 +58,9 @@ class Workflow(unittest.TestCase):
     def get(self, path):
         return json.loads(self.req(path))
 
-    def create(self):
+    def create(self, date='2026-10-19'):
         return self.post('/api/slips', {
-            'date': '2026-10-19', 'supplier': '공급사 A', 'company': '테스트 업체', 'kind': 'AS 발송', 'status': '발송',
+            'date': date, 'supplier': '공급사 A', 'company': '테스트 업체', 'kind': 'AS 발송', 'status': '발송',
             'items': [
                 {'name': '메모리 DDR5', 'serial': '001234', 'qty': 2, 'fault': '부팅 불가'},
                 {'name': '그래픽카드', 'qty': 1}, {'name': '메인보드', 'qty': 1}
@@ -175,7 +175,7 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.get('/api/slips')[0]['supplier'], '공급사 A')
         self.assert_error(400, '/api/suppliers', {'name': '변경된 공급사'})
 
-    def test_settings_and_excel_with_item_history(self):
+    def test_settings_and_excel_with_item_receipt_fields(self):
         self.assertIn('AS'.encode(), self.req('/'))
         self.post('/api/settings', {'company': '테스트 업체'})
         self.assertEqual(self.get('/api/settings')['company'], '테스트 업체')
@@ -188,10 +188,16 @@ class Workflow(unittest.TestCase):
             ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
             rows = [[c.find('s:is/s:t', ns).text for c in row] for row in sheet.findall('s:sheetData/s:row', ns)]
             self.assertEqual(len(rows), 4)
-            self.assertEqual(rows[1][9], '001234')
-            self.assertEqual(rows[1][15:17], ['1', '1'])
-            self.assertIn('2026-10-20 1개 교환', rows[1][17])
-            self.assertIsNone(rows[2][17])
+            first, second = (dict(zip(rows[0], row)) for row in rows[1:3])
+            self.assertEqual(first['출고 시리얼번호'], '001234')
+            self.assertIsNone(first['입고 시리얼번호'])
+            self.assertEqual(first['반환수량'], '1')
+            self.assertEqual(first['미반환수량'], '1')
+            self.assertEqual(first['입고처리'], '교환')
+            self.assertEqual(first['입고일'], '2026-10-20')
+            self.assertIsNone(second['입고처리'])
+            self.assertIsNone(second['입고일'])
+            self.assertNotIn('품명별 반환이력', rows[0])
 
     def test_products_registration_and_rename_preserves_old_slip(self):
         s = self.create()
@@ -240,7 +246,9 @@ class Workflow(unittest.TestCase):
             self.assertEqual(exported['출고 송장번호'], '000012345678')
             self.assertEqual(exported['품명'], '메모리 DDR5')
             self.assertNotIn('모델명', exported)
-            self.assertIn('받는이 전화번호', exported)
+            self.assertNotIn('받는이 전화번호', exported)
+            self.assertNotIn('보낸이 전화번호', exported)
+            self.assertEqual(rows[0][2:6], ['출고일','출고 월','택배사','출고 송장번호'])
         saved.update(shippedDate='', trackingNumber='')
         cleared = self.post('/api/slips', saved)
         self.assertEqual(cleared['shippedMonth'], '')
@@ -349,6 +357,69 @@ class Workflow(unittest.TestCase):
         self.post('/api/return-serials', dict(base, items=[{'index': 1, 'receivedSerial': '000REPLACEMENT'}]))
         self.assert_error(409, '/api/return-serials', dict(base, items=[{'index': 1, 'receivedSerial': 'STALE'}]))
         self.assertEqual(self.get('/api/slips')[0]['items'][1]['receivedSerial'], '000REPLACEMENT')
+
+    def test_daily_slip_numbers_and_issued_number_preservation(self):
+        first, second = self.create(), self.create()
+        self.assertEqual(first['number'], '261019-01')
+        self.assertEqual(second['number'], '261019-02')
+        self.assertEqual(self.create('2026-10-20')['number'], '261020-01')
+        first['date'] = '2026-10-21'
+        self.assertEqual(self.post('/api/slips', first)['number'], '261019-01')
+        self.assertEqual(self.create()['number'], '261019-03')
+
+    def test_concurrent_creations_have_distinct_daily_numbers(self):
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            created = list(pool.map(lambda _: self.create(), range(4)))
+        self.assertEqual(sorted(s['number'] for s in created), ['261019-01','261019-02','261019-03','261019-04'])
+
+    def test_legacy_issued_number_is_kept_and_counted(self):
+        s = self.create()
+        s['number'] = 'AS-20261019-00001'
+        with self.app.db() as c:
+            c.execute('UPDATE slips SET body=? WHERE id=?', (json.dumps(s), s['id']))
+        self.assertEqual(self.get('/api/slips')[0]['number'], 'AS-20261019-00001')
+        self.assertEqual(self.create()['number'], '261019-02')
+
+    def test_excel_order_and_dropdown_with_partial_item_receipt_dates(self):
+        s = self.create()
+        s = self.ret(s, items=[{'index': 0, 'qty': 1, 'receivedSerial': '000NEW'}], result='교환')
+        s = self.ret(s, date='2026-10-21', items=[{'index': 1, 'qty': 1}], result='수리')
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            rows = [[c.find('s:is/s:t', ns).text for c in row] for row in root.findall('s:sheetData/s:row', ns)]
+            headers = rows[0]
+            self.assertEqual(headers[:6], ['전표번호','접수일','출고일','출고 월','택배사','출고 송장번호'])
+            out_index = headers.index('출고 시리얼번호')
+            self.assertEqual(headers[out_index + 1], '입고 시리얼번호')
+            self.assertEqual(headers[-2:], ['입고처리','입고일'])
+            for forbidden in ('받는이 전화번호','보낸이 전화번호','품명별 반환이력','처리 결과','최근 반환일'):
+                self.assertNotIn(forbidden, headers)
+            first, second, pending = [dict(zip(headers, row)) for row in rows[1:]]
+            self.assertEqual(first['입고 시리얼번호'], '000NEW')
+            self.assertEqual(first['입고처리'], '교환')
+            self.assertEqual(first['입고일'], '2026-10-20')
+            self.assertIsNone(second['입고 시리얼번호'])
+            self.assertEqual(second['입고처리'], '수리')
+            self.assertEqual(second['입고일'], '2026-10-21')
+            self.assertIsNone(pending['입고일'])
+            validation = root.find('s:dataValidations/s:dataValidation', ns)
+            self.assertEqual(validation.attrib['sqref'], 'U2:U4')
+            self.assertEqual(validation.attrib['type'], 'list')
+            options = validation.find('s:formula1', ns).text.strip('"').split(',')
+            self.assertEqual(options, self.get('/api/receipt-options'))
+            self.assertIn('교환', options)
+
+    def test_receipt_treatment_selection_and_history_correction(self):
+        s = self.create()
+        self.assert_error(400, '/api/returns', {'id':s['id'], 'version':s['version'], 'date':'2026-10-20', 'all':True, 'result':'임의 값'})
+        s = self.ret(s, all=True, result='교환')
+        s = self.post('/api/return-serials', {'id':s['id'], 'version':s['version'], 'eventIndex':0,
+                      'result':'수리', 'items':[{'index':i, 'receivedSerial':''} for i in range(3)]})
+        self.assertEqual(s['result'], '수리')
+        self.assertEqual(s['items'][0]['receiptTreatment'], '수리')
+        self.assertEqual(s['items'][0]['receivedDate'], '2026-10-20')
+        self.assertEqual(s['status'], '반환완료')
 
     def test_unknown_path_and_invalid_record(self):
         self.assert_error(400, '/api/slips', {'supplier': '', 'date': '2026-10-19'})

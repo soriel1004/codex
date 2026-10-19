@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-let slips = [], settings = {}, suppliers = [], products = [], editing = null, returning = null, view = 'active';
+let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [], editing = null, returning = null, view = 'active';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const total = (s, key) => s.items.reduce((n, i) => n + Number(i[key] || 0), 0);
@@ -26,7 +26,7 @@ function render() {
     ['반환 완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
     ['받는이', suppliers.length, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}<small>${esc(s.requesters.join(' · ')||'의뢰업체 미지정')}</small></td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td>${esc(s.shippedDate||'—')} <span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small></td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${esc(s.returned||'—')}</td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:`<button data-return="${s.id}">반환 이력</button> `}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}<small>${esc(s.requesters.join(' · ')||'의뢰업체 미지정')}</small></td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td>${esc(s.shippedDate||'—')} <span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small></td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:`<button data-return="${s.id}">반환 이력</button> `}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
   $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
@@ -156,9 +156,14 @@ $('#productForm').onsubmit = async e => {
     toast('품명을 저장했습니다.');
   } catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };
+function receiptOptionsHtml(current = '') {
+  return '<option value="">선택 안 함</option>' + receiptOptions.map(value => `<option value="${esc(value)}" ${value === current ? 'selected' : ''}>${esc(value)}</option>`).join('') +
+    (current && !receiptOptions.includes(current) ? `<option selected value="${esc(current)}">${esc(current)} (기존 값)</option>` : '');
+}
 function openReturn(s, all = false) {
   returning = s;
   const done = s.status === '반환완료', form = $('#returnForm'); form.reset();
+  form.elements.result.innerHTML = receiptOptionsHtml(done ? s.result : '');
   form.elements.date.value = today(); form.elements.date.min = s.date;
   $('#returnTitle').textContent = (done ? '반환 이력 · ' : all ? '전량 반환 · ' : '품목 반환 · ') + s.number;
   $('#returnItems').innerHTML = s.items.map((i,index) => {
@@ -189,7 +194,7 @@ function openReturn(s, all = false) {
   if (!done) $('#returnItems textarea:not(:disabled)')?.focus({preventScroll:true});
 }
 function renderReturnHistory(s) {
-  $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><div class="history-heading"><b>${esc(event.date)}</b><span>${esc(event.result||'')}</span><button type="button" data-save-serials="${eventIndex}">입고 시리얼 저장</button></div>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label>`).join('')}</div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
+  $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><div class="history-heading"><b>${esc(event.date)}</b><label>입고처리<select data-history-result>${receiptOptionsHtml(event.result||'')}</select></label><button type="button" data-save-serials="${eventIndex}">입고정보 저장</button></div>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label>`).join('')}</div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
 }
 $('#selectRemaining').onclick = () => {
   $('#returnItems').querySelectorAll('input[type=checkbox]:not(:disabled)').forEach(c => {
@@ -216,13 +221,13 @@ document.addEventListener('click', async e => {
     const event = b.closest('[data-event]');
     const items = [...event.querySelectorAll('[data-history-index]')].map(input => ({index:Number(input.dataset.historyIndex),receivedSerial:input.value}));
     try {
-      returning = await api('/api/return-serials', {id:returning.id,version:returning.version,eventIndex:Number(b.dataset.saveSerials),items});
+      returning = await api('/api/return-serials', {id:returning.id,version:returning.version,eventIndex:Number(b.dataset.saveSerials),result:event.querySelector('[data-history-result]').value,items});
       await reload();
       const saved = returning.returns[Number(b.dataset.saveSerials)];
       event.querySelectorAll('[data-history-index]').forEach(input => {
         input.value = saved.items.find(x => x.index === Number(input.dataset.historyIndex)).receivedSerial || '';
       });
-      b.disabled = false; toast('입고 시리얼을 저장했습니다.');
+      b.disabled = false; toast('입고정보를 저장했습니다.');
     } catch (err) { toast(err.message); b.disabled = false; }
   }
   if (b.dataset.close) $('#'+b.dataset.close).close();
@@ -288,8 +293,8 @@ function preview(s) {
     <div class="slip-title"><div><h1>AS 입출고 전표</h1><p>${esc(s.kind)} · ${esc(s.status)}</p></div><span>${label} 보관용</span></div>
     <div class="slip-meta"><strong>${esc(s.number)}</strong><span>${s.requesters?.length ? `의뢰업체 ${esc(s.requesters.join(' · '))} · ` : ''}접수일 ${esc(s.date)}</span></div>
     <div class="parties">${party('받는이',s.supplier,s.phone)}${party('보낸이',s.company,s.companyPhone,s.manager)}</div>
-    <table class="print-table"><thead><tr><th>품명</th><th>생산 년월</th><th>출고 / 입고 시리얼</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.productionMonth||'—')}</td><td>출고 ${esc(i.serial||'—')}<br><small>입고 ${esc(i.receivedSerial||'—')}</small></td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>
-    <div class="slip-result"><span>합계 수량 <b>${s.items.reduce((n,i)=>n+Number(i.qty),0)}</b></span><span>반환일 ${esc(s.returned||'—')}</span><span>처리 결과 ${esc(s.result||'—')}</span></div>
+    <table class="print-table"><thead><tr><th>품명</th><th>생산 년월</th><th>출고 시리얼번호</th><th>입고 시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.productionMonth||'—')}</td><td>${esc(i.serial||'')}</td><td>${esc(i.receivedSerial||'')}</td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>
+    <div class="slip-result"><span>합계 수량 <b>${s.items.reduce((n,i)=>n+Number(i.qty),0)}</b></span><span>입고처리 ${esc(s.result||'—')}</span><span>입고일 ${esc(s.returned||'—')}</span></div>
     <p class="slip-note"><b>비고</b> ${esc(s.note||'—')}</p>
     <div class="signatures"><span>인계자 __________________ (서명)</span><span>인수자 __________________ (서명)</span></div>
   </div></section>`;
@@ -304,6 +309,6 @@ $('#printBtn').onclick = async () => {
   if (preparePrint()) window.print();
 };
 (async () => {
-  try { settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); products = await api('/api/products'); await reload(); }
+  try { settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); products = await api('/api/products'); receiptOptions = await api('/api/receipt-options'); await reload(); }
   catch (e) { toast('서버 연결 오류: ' + e.message); }
 })();
