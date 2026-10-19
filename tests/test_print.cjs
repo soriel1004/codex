@@ -27,8 +27,8 @@ const {spawn, execFileSync} = require('node:child_process');
     const basic = {
       number:'AS-PRINT-TEST', date:'2026-10-19', kind:'AS 발송', status:'발송',
       supplier:'공급사', company:'내 업체', phone:'010-1234-5678', companyPhone:'02-123-4567',
-      shippedDate:'2031-12-24',shippedMonth:'12월',trackingNumber:'0000-TRACKING-PRIVATE',
-      items:[{name:'메모리 DDR5',model:'MODEL-PRIVATE',serial:'001234',qty:2,returnedQty:0,fault:'부팅 불가 LAST-FAULT-END'}],
+      shippedDate:'2031-12-24',shippedMonth:'12월',trackingNumber:'0000-TRACKING-PRIVATE',courier:'COURIER-PRIVATE',requesters:['GN','대일'],
+      items:[{name:'메모리 DDR5',model:'MODEL-PRIVATE',serial:'001234',productionMonth:'2025-09',receivedSerial:'000NEW-PRINT',qty:2,returnedQty:0,fault:'부팅 불가 LAST-FAULT-END'}],
       note:'TAIL-NOTE-OK'
     };
     const long = {...basic, supplier:'공급사'.repeat(20), company:'컴퓨터'.repeat(20),
@@ -36,7 +36,7 @@ const {spawn, execFileSync} = require('node:child_process');
       business:'BUSINESS-PRIVATE', manager:'담당자'.repeat(10), result:'처리결과'.repeat(25),
       note:'비고 확인 '.repeat(27)+'TAIL-NOTE-OK',
       items:Array.from({length:8},(_,i)=>({name:(`부품${i} `+'긴품명'.repeat(40)).slice(0,120),
-        model:'MODEL-PRIVATE',serial:'SERIAL12'.repeat(5),qty:99999,returnedQty:99999,
+        model:'MODEL-PRIVATE',serial:'SERIAL12'.repeat(5),productionMonth:'2025-09',receivedSerial:'NEW-SERIAL-'.repeat(8),qty:99999,returnedQty:99999,
         fault:('화면 출력 불량 및 재시작 확인 '.repeat(4)).slice(0,56)+(i===7?'LAST-FAULT-END':'')}))
     };
     const unbroken = {...long, items:long.items.map((i,n)=>({...i, fault:'W'.repeat(56)+(n===7?'LAST-FAULT-END':'W'.repeat(13))}))};
@@ -76,11 +76,12 @@ const {spawn, execFileSync} = require('node:child_process');
       const text=execFileSync('pdftotext',['-raw',file,'-'],{encoding:'utf8'}).replace(/\s/g,'');
       assert.equal(text.split('TAIL-NOTE-OK').length-1,2,`${name}: both notes must survive`);
       assert.equal(text.split('LAST-FAULT-END').length-1,2,`${name}: last item's symptom must survive`);
-      for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고일','출고월','송장번호','공급자','공급받는자']) {
+      for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','COURIER-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고일','출고월','송장번호','공급자','공급받는자']) {
         assert.ok(!text.includes(hidden),`${name}: must not print ${hidden}`);
       }
       assert.ok(text.includes('받는이보관용') && text.includes('보낸이보관용'),`${name}: updated party labels`);
       assert.ok(text.includes('010-1234-5678') && text.includes('02-123-4567'),`${name}: phone numbers retained`);
+      assert.ok(text.includes('2025-09')&&text.includes('GN')&&text.includes('대일'),`${name}: production month and requesting companies retained`);
       const bbox=execFileSync('pdftotext',['-bbox',file,'-'],{encoding:'utf8'});
       for (const word of bbox.matchAll(/<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)"/g)) {
         assert.ok(+word[1]>=33 && +word[2]>=33 && +word[3]<=562 && +word[4]<=809,`${name}: text outside A4's 12 mm printable margins: ${word[0]}`);

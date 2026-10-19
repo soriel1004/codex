@@ -28,12 +28,16 @@ def normalize(r):
     r.setdefault('version', 0)
     r.setdefault('shippedDate', '')
     r.setdefault('trackingNumber', '')
+    r.setdefault('courier', '')
+    r.setdefault('requesters', [])
     r['shippedMonth'] = str(int(r['shippedDate'][5:7])) + '월' if r['shippedDate'] else ''
     for i, item in enumerate(r['items']):
         # Preserve old model information as part of the unified product name.
         if item.get('model'):
             item['name'] = ' '.join(filter(None, (item.get('name', ''), item['model'])))
         item.pop('model', None)
+        item.setdefault('productionMonth', '')
+        item['receivedSerial'] = '\n'.join(x.get('receivedSerial', '') for event in r['returns'] for x in event['items'] if x['index'] == i and x.get('receivedSerial'))
         item['returnedQty'] = sum(int(x['qty']) for event in r['returns'] for x in event['items'] if x['index'] == i)
         item['remainingQty'] = int(item['qty']) - item['returnedQty']
     if all(i['remainingQty'] == 0 for i in r['items']):
@@ -82,6 +86,28 @@ def valid_date(value):
     return value
 
 
+def clean_received_serial(value):
+    if not isinstance(value, str) or len(value) > 400:
+        raise ValueError('입고 시리얼은 400자 이내로 입력하세요. 여러 개는 쉼표나 줄바꿈으로 구분하세요.')
+    return value.strip()
+
+
+def update_return_serials(r, data):
+    event_index = data.get('eventIndex')
+    if type(event_index) is not int or not 0 <= event_index < len(r['returns']):
+        raise ValueError('반환 이력을 선택하세요.')
+    event = r['returns'][event_index]
+    updates = data.get('items', [])
+    indexes = [x.get('index') for x in updates]
+    if any(type(i) is not int for i in indexes) or len(set(indexes)) != len(indexes) or set(indexes) != {x['index'] for x in event['items']}:
+        raise ValueError('반환 이력의 품목이 일치하지 않습니다.')
+    serials = {x['index']: clean_received_serial(x.get('receivedSerial', '')) for x in updates}
+    for item in event['items']:
+        item['receivedSerial'] = serials[item['index']]
+    r['version'] += 1
+    return normalize(r)
+
+
 def apply_return(r, data):
     date = valid_date(data.get('date', ''))
     if date < r['date']:
@@ -98,7 +124,8 @@ def apply_return(r, data):
             raise ValueError('반환 품목이 올바르지 않습니다.')
         if type(qty) is not int or qty < 1 or qty > r['items'][i]['remainingQty']:
             raise ValueError('반환 수량은 미반환 수량 이내의 정수여야 합니다.')
-        seen.add(i); clean.append({'index': i, 'qty': qty})
+        serial = clean_received_serial(x.get('receivedSerial', ''))
+        seen.add(i); clean.append({'index': i, 'qty': qty, **({'receivedSerial': serial} if serial else {})})
     r['returns'].append({'date': date, 'result': str(data.get('result', ''))[:100], 'items': clean})
     r['result'] = str(data.get('result', ''))[:100] or r.get('result', '')
     r['version'] += 1
@@ -106,11 +133,11 @@ def apply_return(r, data):
 
 
 def xlsx(rows):
-    headers = ['전표번호','접수일','구분','진행상태','받는이','받는이 전화번호','보낸이','보낸이 전화번호','품명','시리얼번호','수량','불량 증상','처리 결과','최근 반환일','비고','반환수량','미반환수량','품명별 반환이력','출고일','출고 월','출고 송장번호']
+    headers = ['전표번호','접수일','구분','진행상태','받는이','받는이 전화번호','보낸이','보낸이 전화번호','품명','출고 시리얼번호','수량','불량 증상','처리 결과','최근 반환일','비고','반환수량','미반환수량','품명별 반환이력','출고일','출고 월','출고 송장번호','택배사','의뢰업체','생산 년월','입고 시리얼번호']
     table = [headers]
     for r in rows:
         for index, item in enumerate(r['items']):
-            table.append([r['number'],r['date'],r['kind'],r['status'],r['supplier'],r.get('phone',''),r.get('company',''),r.get('companyPhone',''),item.get('name',''),item.get('serial',''),item.get('qty',1),item.get('fault',''),r.get('result',''),r.get('returned',''),r.get('note',''),item['returnedQty'],item['remainingQty'],' / '.join(e['date']+' '+str(x['qty'])+'개 '+e.get('result','') for e in r['returns'] for x in e['items'] if x['index']==index),r.get('shippedDate',''),r.get('shippedMonth',''),r.get('trackingNumber','')])
+            table.append([r['number'],r['date'],r['kind'],r['status'],r['supplier'],r.get('phone',''),r.get('company',''),r.get('companyPhone',''),item.get('name',''),item.get('serial',''),item.get('qty',1),item.get('fault',''),r.get('result',''),r.get('returned',''),r.get('note',''),item['returnedQty'],item['remainingQty'],' / '.join(e['date']+' '+str(x['qty'])+'개 '+e.get('result','') + (' [입고 S/N: '+x['receivedSerial']+']' if x.get('receivedSerial') else '') for e in r['returns'] for x in e['items'] if x['index']==index),r.get('shippedDate',''),r.get('shippedMonth',''),r.get('trackingNumber',''),r.get('courier',''),' · '.join(r.get('requesters',[])),item.get('productionMonth',''),item.get('receivedSerial','')])
     def col(i):
         s = ''
         while i:
@@ -131,7 +158,7 @@ def xlsx(rows):
         z.writestr('_rels/.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
         z.writestr('xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="AS 누적내역" sheetId="1" r:id="rId1"/></sheets></workbook>')
         z.writestr('xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
-        z.writestr('xl/worksheets/sheet1.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="21" width="22" customWidth="1"/></cols><sheetData>'+''.join(xmlrows)+'</sheetData><autoFilter ref="A1:U'+str(len(table))+'"/></worksheet>')
+        z.writestr('xl/worksheets/sheet1.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="25" width="22" customWidth="1"/></cols><sheetData>'+''.join(xmlrows)+'</sheetData><autoFilter ref="A1:Y'+str(len(table))+'"/></worksheet>')
     return out.getvalue()
 
 class Handler(BaseHTTPRequestHandler):
@@ -196,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
                     except sqlite3.IntegrityError:
                         raise ValueError('이미 등록된 품명입니다.')
                 return self.send({'ok': True})
-            if path not in ('/api/slips', '/api/returns'):
+            if path not in ('/api/slips', '/api/returns', '/api/return-serials'):
                 return self.send({'error':'찾을 수 없습니다.'},status=404)
             with db() as c:
                 # Serialize read/validate/write so simultaneous returns cannot exceed sent quantities.
@@ -210,7 +237,11 @@ class Handler(BaseHTTPRequestHandler):
                     old = normalize(json.loads(row[0]))
                     if data.get('version', 0) != old['version']:
                         return self.send({'error':'다른 작업에서 전표가 변경되었습니다. 목록을 새로고침 후 다시 처리하세요.'},status=409)
-                if path == '/api/returns':
+                if path == '/api/return-serials':
+                    if not old:
+                        raise ValueError('반환 이력이 있는 전표를 선택하세요.')
+                    result = update_return_serials(old, data)
+                elif path == '/api/returns':
                     if not old:
                         raise ValueError('반환할 전표를 선택하세요.')
                     result = apply_return(old, data)
@@ -220,6 +251,11 @@ class Handler(BaseHTTPRequestHandler):
                     valid_date(data['date'])
                     if data.get('shippedDate'):
                         valid_date(data['shippedDate'])
+                    requesters = data.get('requesters', old.get('requesters', []) if old else [])
+                    if not isinstance(requesters, list) or any(x not in ('GN', '대일') for x in requesters) or len(set(requesters)) != len(requesters):
+                        raise ValueError('의뢰업체는 GN, 대일 중 선택하거나 선택하지 않을 수 있습니다.')
+                    if not isinstance(data.get('courier', ''), str) or len(data.get('courier', '')) > 40:
+                        raise ValueError('택배사는 40자 이내로 입력하세요.')
                     if len(str(data.get('trackingNumber', ''))) > 60:
                         raise ValueError('출고 송장번호는 60자 이내로 입력하세요.')
                     if not (old and old['supplier'] == data['supplier']) and not c.execute('SELECT 1 FROM suppliers WHERE name=?', (data['supplier'],)).fetchone():
@@ -230,10 +266,13 @@ class Handler(BaseHTTPRequestHandler):
                     for item in items:
                         if not item.get('name','').strip() or not str(item.get('qty','')).isdigit() or not 1 <= int(item['qty']) <= 99999:
                             raise ValueError('품명과 1~99999의 정수 수량을 입력하세요.')
+                        month = item.get('productionMonth', '')
+                        if month:
+                            valid_date(month + '-01')
                         if len(item['name']) > 120:
                             raise ValueError('품명은 120자 이내로 입력하세요.')
                     if old and old['returns']:
-                        fields = ('name','serial','qty','fault')
+                        fields = ('name','serial','qty','fault','productionMonth')
                         if len(items) != len(old['items']) or any(str(a.get(k,'')) != str(b.get(k,'')) for a,b in zip(items,old['items']) for k in fields):
                             raise ValueError('반환 이력이 있는 전표의 품목은 변경할 수 없습니다.')
                         if data['date'] > min(e['date'] for e in old['returns']):
@@ -241,9 +280,10 @@ class Handler(BaseHTTPRequestHandler):
                     if data.get('status') not in ('접수','발송','처리중','부분반환','반환완료'):
                         raise ValueError('진행상태가 올바르지 않습니다.')
                     result = dict(old or {})
-                    keys = ('date','supplier','phone','company','companyPhone','manager','kind','status','note','shippedDate','trackingNumber')
+                    keys = ('date','supplier','phone','company','companyPhone','manager','kind','status','note','shippedDate','trackingNumber','courier')
                     result.update({k: data[k] for k in keys if k in data})
-                    result['items'] = [{k:v for k,v in item.items() if k in ('name','serial','qty','fault')} for item in items]
+                    result['requesters'] = [name for name in ('GN','대일') if name in requesters]
+                    result['items'] = [{k:v for k,v in item.items() if k in ('name','serial','qty','fault','productionMonth')} for item in items]
                     result['returns'] = old['returns'] if old else []
                     result['version'] = old['version'] + 1 if old else 0
                     if not result['returns'] and result['status'] in ('부분반환', '반환완료'):

@@ -284,6 +284,72 @@ class Workflow(unittest.TestCase):
             s['items'][0]['name'] = name
             self.assert_error(400, '/api/slips', s)
 
+    def test_courier_requesters_production_month_and_excel(self):
+        s = self.create()
+        self.assertEqual(s['requesters'], [])
+        self.assertEqual(s['courier'], '')
+        self.assertEqual(s['items'][0]['productionMonth'], '')
+        s.update(courier='CJ대한통운', requesters=['대일', 'GN'])
+        s['items'][0]['productionMonth'] = '2025-09'
+        s = self.post('/api/slips', s)
+        self.assertEqual(s['requesters'], ['GN', '대일'])
+        self.assertEqual(s['items'][0]['productionMonth'], '2025-09')
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            rows = [[c.find('s:is/s:t', ns).text for c in row] for row in root.findall('s:sheetData/s:row', ns)]
+            record = dict(zip(rows[0], rows[1]))
+            self.assertEqual(record['택배사'], 'CJ대한통운')
+            self.assertEqual(record['의뢰업체'], 'GN · 대일')
+            self.assertEqual(record['생산 년월'], '2025-09')
+        s['requesters'] = []
+        self.assertEqual(self.post('/api/slips', s)['requesters'], [])
+
+    def test_invalid_requesters_and_production_month(self):
+        s = self.create()
+        for selection in (['기타'], ['GN', 'GN'], 'GN'):
+            bad = dict(s, requesters=selection)
+            self.assert_error(400, '/api/slips', bad)
+        for month in ('2025-13', '2025-01-01', '2025-1'):
+            bad = copy.deepcopy(s)
+            bad['items'][0]['productionMonth'] = month
+            self.assert_error(400, '/api/slips', bad)
+
+    def test_replacement_serials_preserve_outbound_and_partial_history(self):
+        s = self.create()
+        s = self.ret(s, items=[{'index': 0, 'qty': 1, 'receivedSerial': '000NEW-A'}])
+        self.assertEqual(s['items'][0]['serial'], '001234')
+        self.assertEqual(s['items'][0]['receivedSerial'], '000NEW-A')
+        s = self.ret(s, items=[{'index': 0, 'qty': 1, 'receivedSerial': '000NEW-B'}])
+        self.assertEqual(s['items'][0]['receivedSerial'], '000NEW-A\n000NEW-B')
+        self.assertEqual(s['returns'][0]['items'][0]['receivedSerial'], '000NEW-A')
+        s = self.ret(s, all=True)
+        self.assertEqual(s['status'], '반환완료')
+        s = self.post('/api/return-serials', {'id': s['id'], 'version': s['version'], 'eventIndex': 0,
+                      'items': [{'index': 0, 'receivedSerial': '000CORRECTED'}]})
+        self.assertEqual(s['items'][0]['receivedSerial'], '000CORRECTED\n000NEW-B')
+        self.assertEqual(s['items'][0]['serial'], '001234')
+        self.assertEqual(s['status'], '반환완료')
+        self.assertEqual(s['returns'][0]['items'][0]['qty'], 1)
+        self.assertEqual(s['returns'][0]['date'], '2026-10-20')
+        self.assertEqual(self.get('/api/slips')[0]['items'][0]['receivedSerial'], '000CORRECTED\n000NEW-B')
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            xml = z.read('xl/worksheets/sheet1.xml').decode()
+            self.assertIn('000CORRECTED', xml)
+            self.assertIn('000NEW-B', xml)
+            self.assertIn('001234', xml)
+
+    def test_serial_corrections_validate_version_and_event_membership(self):
+        s = self.ret(self.create(), items=[{'index': 1, 'qty': 1}])
+        base = {'id': s['id'], 'version': s['version'], 'eventIndex': 0}
+        for items in ([], [{'index': 0, 'receivedSerial': 'WRONG'}],
+                      [{'index': 1, 'receivedSerial': 'A'}, {'index': 1, 'receivedSerial': 'B'}],
+                      [{'index': 1, 'receivedSerial': 'A' * 401}]):
+            self.assert_error(400, '/api/return-serials', dict(base, items=items))
+        self.post('/api/return-serials', dict(base, items=[{'index': 1, 'receivedSerial': '000REPLACEMENT'}]))
+        self.assert_error(409, '/api/return-serials', dict(base, items=[{'index': 1, 'receivedSerial': 'STALE'}]))
+        self.assertEqual(self.get('/api/slips')[0]['items'][1]['receivedSerial'], '000REPLACEMENT')
+
     def test_unknown_path_and_invalid_record(self):
         self.assert_error(400, '/api/slips', {'supplier': '', 'date': '2026-10-19'})
         with self.assertRaises(urllib.error.HTTPError) as err:
