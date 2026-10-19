@@ -90,7 +90,7 @@ function render() {
     ['반환 완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
     ['받는이', suppliers.length, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions"><div class="row-action-buttons">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></div></td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions"><div class="row-action-buttons">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">부분완료</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">완료</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></div></td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
   $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
@@ -196,7 +196,7 @@ function openEditor(s = null) {
   for (const [k,v] of Object.entries(source)) if (k !== 'requesters' && f.elements.namedItem(k)) f.elements.namedItem(k).value=v;
   f.querySelectorAll('[name=requesters]').forEach(c=>c.checked=Boolean(s?.requesters.includes(c.value)));
   if (s) s.items.forEach(itemRow); else {f.elements.date.value=today(); itemRow();}
-  if (s) f.elements.status.value=s.status;
+  f.elements.status.value = s ? s.status : '발송';
   showShippedMonth();
   $('#editorReceiptSerials').hidden = !s;
   $('#editorElapsed').textContent = s ? `경과 ${s.elapsedDays}일` : '';
@@ -319,7 +319,7 @@ function openReturn(s, all = false) {
   const done = s.status === '반환완료', form = $('#returnForm'); form.reset();
   form.elements.result.innerHTML = receiptOptionsHtml(done ? s.result : '');
   form.elements.date.value = today(); form.elements.date.min = s.date;
-  $('#returnTitle').textContent = (done ? '반환 이력 · ' : all ? '전량 반환 · ' : '품목 반환 · ') + s.number;
+  $('#returnTitle').textContent = (done ? '반환 이력 · ' : all ? '완료 처리 · ' : '부분완료 처리 · ') + s.number;
   $('#returnItems').innerHTML = s.items.map((i,index) => {
     const selected = all && i.remainingQty > 0;
     return `<tr data-index="${index}">
@@ -341,7 +341,7 @@ function openReturn(s, all = false) {
   });
   renderReturnHistory(s);
   $('#returnSave').hidden = done; $('#selectRemaining').hidden = done || all;
-  $('#returnSave').textContent = all ? '전량 반환 저장' : '선택 품목 반환 저장';
+  $('#returnSave').textContent = all ? '완료 저장' : '선택 품목 부분완료 저장';
   form.elements.date.disabled = done; form.elements.result.disabled = done; form.elements.mbRepairReport.disabled = done;
   $('#returnDialog').showModal();
   $('#returnDialog').scrollTop = 0;
@@ -358,7 +358,7 @@ $('#selectRemaining').onclick = () => {
 async function saveReturn(s, data) {
   const result = await api('/api/returns', {id:s.id, version:s.version, ...data});
   await reload();
-  toast(result.status === '반환완료' ? '전량 반환 완료 · 완료 목록으로 이동했습니다.' : '일부 반환을 저장했습니다. 남은 품목은 진행 목록에서 관리하세요.');
+  toast(result.status === '반환완료' ? '완료 · 완료 목록으로 이동했습니다.' : '부분완료를 저장했습니다. 남은 품목은 진행 목록에서 관리하세요.');
 }
 $('#returnForm').onsubmit = async e => {
   e.preventDefault();
