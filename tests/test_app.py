@@ -40,9 +40,11 @@ class Workflow(unittest.TestCase):
 
     def setUp(self):
         with self.app.db() as c:
-            for table in ('slips', 'settings', 'suppliers', 'app_meta'):
+            for table in ('slips', 'settings', 'suppliers', 'products', 'app_meta'):
                 c.execute('DELETE FROM ' + table)
-        self.post('/api/suppliers', {'name': '공급사 A', 'phone': '02-123-4567', 'address': '서울'})
+        self.post('/api/suppliers', {'name': '공급사 A', 'phone': '02-123-4567'})
+        for name in ('메모리 DDR5', '그래픽카드', '메인보드'):
+            self.post('/api/products', {'name': name})
 
     def req(self, path, data=None):
         request = urllib.request.Request(self.base + path, data=json.dumps(data).encode() if data is not None else None,
@@ -60,7 +62,7 @@ class Workflow(unittest.TestCase):
         return self.post('/api/slips', {
             'date': '2026-10-19', 'supplier': '공급사 A', 'company': '테스트 업체', 'kind': 'AS 발송', 'status': '발송',
             'items': [
-                {'name': '메모리', 'model': 'DDR5', 'serial': '001234', 'qty': 2, 'fault': '부팅 불가'},
+                {'name': '메모리 DDR5', 'serial': '001234', 'qty': 2, 'fault': '부팅 불가'},
                 {'name': '그래픽카드', 'qty': 1}, {'name': '메인보드', 'qty': 1}
             ]})
 
@@ -190,6 +192,74 @@ class Workflow(unittest.TestCase):
             self.assertEqual(rows[1][15:17], ['1', '1'])
             self.assertIn('2026-10-20 1개 교환', rows[1][17])
             self.assertIsNone(rows[2][17])
+
+    def test_products_registration_and_rename_preserves_old_slip(self):
+        s = self.create()
+        product = next(p for p in self.get('/api/products') if p['name'] == '메모리 DDR5')
+        self.post('/api/products', dict(product, name='삼성 DDR5 16GB'))
+        names = [p['name'] for p in self.get('/api/products')]
+        self.assertIn('삼성 DDR5 16GB', names)
+        self.assertNotIn('메모리 DDR5', names)
+        self.assertEqual(self.get('/api/slips')[0]['items'][0]['name'], '메모리 DDR5')
+        s['note'] = '기존 품명 유지'
+        self.assertEqual(self.post('/api/slips', s)['items'][0]['name'], '메모리 DDR5')
+        self.assert_error(400, '/api/products', {'name': '삼성 DDR5 16GB'})
+        self.assert_error(400, '/api/products', {'name': ' '})
+        self.assert_error(400, '/api/products', {'name': 'A' * 121})
+
+    def test_legacy_model_is_combined_once_and_catalogue_is_seeded(self):
+        s = self.ret(self.create(), items=[{'index': 0, 'qty': 1}])
+        s['items'][0].update(name='메모리', model='DDR5')
+        with self.app.db() as c:
+            c.execute('UPDATE slips SET body=? WHERE id=?', (json.dumps(s), s['id']))
+            c.execute('DELETE FROM products')
+        migrated = self.get('/api/slips')[0]
+        self.assertEqual(migrated['items'][0]['name'], '메모리 DDR5')
+        self.assertNotIn('model', migrated['items'][0])
+        self.assertEqual(migrated['items'][0]['returnedQty'], 1)
+        self.assertIn('메모리 DDR5', [p['name'] for p in self.get('/api/products')])
+        saved = self.post('/api/slips', migrated)
+        self.assertEqual(saved['items'][0]['name'], '메모리 DDR5')
+        self.assertEqual(saved['returns'], s['returns'])
+        self.assertEqual(self.get('/api/slips')[0]['items'][0]['name'], '메모리 DDR5')
+
+    def test_shipping_metadata_and_excel_preserve_tracking_zeros(self):
+        s = self.create()
+        s.update(shippedDate='2026-01-31', trackingNumber='000012345678', shippedMonth='틀린 월')
+        saved = self.post('/api/slips', s)
+        self.assertEqual(saved['shippedMonth'], '1월')
+        self.assertEqual(saved['trackingNumber'], '000012345678')
+        self.assertEqual(self.get('/api/slips')[0]['shippedDate'], '2026-01-31')
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            rows = [[c.find('s:is/s:t', ns).text for c in row] for row in root.findall('s:sheetData/s:row', ns)]
+            exported = dict(zip(rows[0], rows[1]))
+            self.assertEqual(exported['출고일'], '2026-01-31')
+            self.assertEqual(exported['출고 월'], '1월')
+            self.assertEqual(exported['출고 송장번호'], '000012345678')
+            self.assertEqual(exported['품명'], '메모리 DDR5')
+            self.assertNotIn('모델명', exported)
+            self.assertIn('받는이 전화번호', exported)
+        saved.update(shippedDate='', trackingNumber='')
+        cleared = self.post('/api/slips', saved)
+        self.assertEqual(cleared['shippedMonth'], '')
+        cleared['shippedDate'] = '2026-02-30'
+        self.assert_error(400, '/api/slips', cleared)
+
+    def test_removed_input_fields_are_not_accepted(self):
+        self.post('/api/settings', {'company': '새 업체', 'companyPhone': '010-0000-0000',
+                                    'address': '주소', 'business': '사업자번호'})
+        settings = self.get('/api/settings')
+        self.assertEqual(settings['companyPhone'], '010-0000-0000')
+        self.assertNotIn('address', settings)
+        self.assertNotIn('business', settings)
+        self.assertNotIn('address', self.get('/api/suppliers')[0])
+        s = self.create()
+        s.update(address='새 주소', business='새 번호', supplierAddress='받는이 주소')
+        saved = self.post('/api/slips', s)
+        for key in ('address', 'business', 'supplierAddress'):
+            self.assertNotIn(key, saved)
 
     def test_unknown_path_and_invalid_record(self):
         self.assert_error(400, '/api/slips', {'supplier': '', 'date': '2026-10-19'})

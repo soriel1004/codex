@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-let slips = [], settings = {}, suppliers = [], editing = null, returning = null, view = 'active';
+let slips = [], settings = {}, suppliers = [], products = [], editing = null, returning = null, view = 'active';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const total = (s, key) => s.items.reduce((n, i) => n + Number(i[key] || 0), 0);
@@ -23,9 +23,9 @@ function render() {
     ['전체 전표', slips.length, '누적 접수 내역'],
     ['진행 중', slips.filter(s => s.status !== '반환완료').length, '부분반환 포함 · 미반환 품목 관리'],
     ['반환 완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
-    ['공급사', suppliers.length, '등록된 거래 공급사']
+    ['받는이', suppliers.length, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${esc(s.returned||'—')}</td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="남은 수량을 오늘 날짜로 모두 반환 처리">전량 반환</button> `:`<button data-return="${s.id}">반환 이력</button> `}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td>${esc(s.shippedDate||'—')} <span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.trackingNumber||'—')}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${esc(s.returned||'—')}</td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="남은 수량을 오늘 날짜로 모두 반환 처리">전량 반환</button> `:`<button data-return="${s.id}">반환 이력</button> `}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
   $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
@@ -33,7 +33,7 @@ function render() {
 async function reload() { slips = await api('/api/slips'); render(); }
 function supplierOptions(selected = '') {
   const names = suppliers.map(s => s.name);
-  $('#slipForm [name=supplier]').innerHTML = '<option value="">공급사를 선택하세요</option>' +
+  $('#slipForm [name=supplier]').innerHTML = '<option value="">받는이를 선택하세요</option>' +
     suppliers.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('') +
     (selected && !names.includes(selected) ? `<option value="${esc(selected)}">${esc(selected)} (기존 전표)</option>` : '');
   $('#slipForm [name=supplier]').value = selected;
@@ -42,17 +42,29 @@ $('#slipForm [name=supplier]').onchange = e => {
   const supplier = suppliers.find(s => s.name === e.target.value);
   if (supplier) {
     $('#slipForm [name=phone]').value = supplier.phone;
-    $('#slipForm [name=supplierAddress]').value = supplier.address;
   }
 };
+function productOptions(selected = '') {
+  return '<option value="">품명을 선택하세요</option>' + products.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('') +
+    (selected && !products.some(p => p.name === selected) ? `<option value="${esc(selected)}">${esc(selected)} (기존 전표)</option>` : '');
+}
 function itemRow(i = {}) {
   const tr = document.createElement('tr');
-  tr.innerHTML = ['name','model','serial','qty','fault'].map(k => `<td><input data-key="${k}" aria-label="${({name:'품목명',model:'모델명',serial:'시리얼번호',qty:'수량',fault:'불량 증상'})[k]}" ${k==='qty'?'type="number" min="1" max="99999" required':'maxlength="'+(k==='fault'?70:40)+'"'} ${k==='name'?'required':''} value="${esc(i[k]??(k==='qty'?1:''))}"></td>`).join('') + '<td><button type="button" class="remove" aria-label="품목 삭제">×</button></td>';
+  tr.innerHTML = `<td><select data-key="name" aria-label="품명" required>${productOptions(i.name)}</select></td>` +
+    ['serial','qty','fault'].map(k => `<td><input data-key="${k}" aria-label="${({serial:'시리얼번호',qty:'수량',fault:'불량 증상'})[k]}" ${k==='qty'?'type="number" min="1" max="99999" required':'maxlength="'+(k==='fault'?70:40)+'"'} value="${esc(i[k]??(k==='qty'?1:''))}"></td>`).join('') +
+    '<td><button type="button" class="remove" aria-label="품목 삭제">×</button></td>';
+  tr.querySelector('select').value = i.name || '';
   tr.querySelector('.remove').onclick = () => {
     if ($('#items').children.length > 1) tr.remove(); else toast('품목은 최소 1개가 필요합니다.');
   };
   $('#items').append(tr);
 }
+function showShippedMonth() {
+  const date = $('#shippedDate').value;
+  $('#shippedMonth').textContent = date ? Number(date.slice(5,7)) + '월' : '—월';
+}
+$('#shippedDate').oninput = showShippedMonth;
+$('#shippedDate').onchange = showShippedMonth;
 function openEditor(s = null) {
   editing = s;
   const f = $('#slipForm'); f.reset(); $('#items').innerHTML = '';
@@ -65,9 +77,11 @@ function openEditor(s = null) {
     for (const [k,v] of Object.entries(s)) if (f.elements.namedItem(k)) f.elements.namedItem(k).value = v;
     s.items.forEach(itemRow);
   } else { f.elements.date.value = today(); itemRow(); }
+  showShippedMonth();
   $('#itemLock').hidden = !locked;
   $('#addItem').disabled = locked;
   $('#items').querySelectorAll('input').forEach(i => i.readOnly = locked);
+  $('#items').querySelectorAll('select').forEach(i => i.disabled = locked);
   $('#items').querySelectorAll('button').forEach(b => b.disabled = locked);
   $('#editor').showModal();
 }
@@ -76,8 +90,8 @@ $('#addItem').onclick = () => $('#items').children.length < 8 ? itemRow() : toas
 $('#slipForm').onsubmit = async e => {
   e.preventDefault();
   const data = {...(editing || settings), ...Object.fromEntries(new FormData(e.target))};
-  data.items = [...$('#items').children].map(tr => Object.fromEntries([...tr.querySelectorAll('input')].map(i => [i.dataset.key,i.value])));
-  if (!data.company) return toast('먼저 내 업체 설정에서 업체명을 입력하세요.');
+  data.items = [...$('#items').children].map(tr => Object.fromEntries([...tr.querySelectorAll('[data-key]')].map(i => [i.dataset.key,i.value])));
+  if (!data.company) return toast('먼저 보낸이 설정에서 업체명을 입력하세요.');
   const btn = e.submitter; btn.disabled = true;
   try { await api('/api/slips', data); $('#editor').close(); await reload(); toast('전표가 저장되었습니다.'); }
   catch (err) { toast(err.message); } finally { btn.disabled = false; }
@@ -95,7 +109,7 @@ $('#settingsForm').onsubmit = async e => {
   } catch (err) { toast(err.message); }
 };
 function renderSuppliers() {
-  $('#supplierRows').innerHTML = suppliers.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td>${esc(s.address)}</td><td><button data-supplier-edit="${s.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="4">등록된 공급사가 없습니다. 위에서 등록하세요.</td></tr>';
+  $('#supplierRows').innerHTML = suppliers.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td><button data-supplier-edit="${s.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="3">등록된 받는이가 없습니다. 위에서 등록하세요.</td></tr>';
 }
 $('#suppliersBtn').onclick = () => { $('#supplierForm').reset(); renderSuppliers(); $('#suppliers').showModal(); };
 $('#supplierReset').onclick = () => { $('#supplierForm').reset(); $('#supplierForm [name=id]').value = ''; };
@@ -104,7 +118,27 @@ $('#supplierForm').onsubmit = async e => {
   try {
     await api('/api/suppliers', Object.fromEntries(new FormData(e.target)));
     suppliers = await api('/api/suppliers'); e.target.reset(); e.target.elements.id.value = '';
-    renderSuppliers(); render(); toast('공급사를 저장했습니다.');
+    renderSuppliers(); render(); toast('받는이를 저장했습니다.');
+  } catch (err) { toast(err.message); } finally { btn.disabled = false; }
+};
+function renderProducts() {
+  $('#productRows').innerHTML = products.map(p => `<tr><td>${esc(p.name)}</td><td><button data-product-edit="${p.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="2">등록된 품명이 없습니다. 위에서 추가하세요.</td></tr>';
+}
+function openProducts() { $('#productForm').reset(); renderProducts(); $('#products').showModal(); }
+$('#productsBtn').onclick = openProducts;
+$('#manageProducts').onclick = openProducts;
+$('#productReset').onclick = () => { $('#productForm').reset(); $('#productForm [name=id]').value = ''; };
+$('#productForm').onsubmit = async e => {
+  e.preventDefault(); const btn = e.submitter; btn.disabled = true;
+  try {
+    await api('/api/products', Object.fromEntries(new FormData(e.target)));
+    products = await api('/api/products'); e.target.reset(); e.target.elements.id.value = '';
+    renderProducts();
+    $('#items').querySelectorAll('select').forEach(select => {
+      const selected = select.value;
+      select.innerHTML = productOptions(selected); select.value = selected;
+    });
+    toast('품명을 저장했습니다.');
   } catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };
 function openReturn(s) {
@@ -112,7 +146,7 @@ function openReturn(s) {
   const done = s.status === '반환완료', form = $('#returnForm'); form.reset();
   form.elements.date.value = today(); form.elements.date.min = s.date;
   $('#returnTitle').textContent = (done ? '반환 이력 · ' : '품목 반환 · ') + s.number;
-  $('#returnItems').innerHTML = s.items.map((i,index) => `<tr data-index="${index}"><td><input type="checkbox" aria-label="${esc(i.name)} 반환 선택" ${i.remainingQty ? '' : 'disabled'}></td><td>${esc(i.name)}<small>${esc(i.model)} / ${esc(i.serial)}</small></td><td>${i.qty}</td><td>${i.returnedQty}</td><td>${i.remainingQty}</td><td><input type="number" aria-label="${esc(i.name)} 이번 반환 수량" min="1" max="${i.remainingQty}" value="${i.remainingQty||0}" disabled></td></tr>`).join('');
+  $('#returnItems').innerHTML = s.items.map((i,index) => `<tr data-index="${index}"><td><input type="checkbox" aria-label="${esc(i.name)} 반환 선택" ${i.remainingQty ? '' : 'disabled'}></td><td>${esc(i.name)}<small>${esc(i.serial)}</small></td><td>${i.qty}</td><td>${i.returnedQty}</td><td>${i.remainingQty}</td><td><input type="number" aria-label="${esc(i.name)} 이번 반환 수량" min="1" max="${i.remainingQty}" value="${i.remainingQty||0}" disabled></td></tr>`).join('');
   $('#returnItems').querySelectorAll('input[type=checkbox]').forEach(c => c.onchange = () => { c.closest('tr').querySelector('input[type=number]').disabled = !c.checked; });
   $('#returnHistory').innerHTML = s.returns.map(event => `<div class="history-entry"><b>${esc(event.date)}</b><span>${event.items.map(x => `${esc(s.items[x.index].name)} ${x.qty}개`).join(' · ')}</span><small>${esc(event.result||'')}</small></div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
   $('#returnSave').hidden = done; $('#selectRemaining').hidden = done;
@@ -149,9 +183,13 @@ document.addEventListener('click', async e => {
     try { await saveReturn(slips.find(s => s.id === Number(b.dataset.returnAll)), {date:today(), all:true}); }
     catch (err) { toast(err.message); b.disabled = false; }
   }
+  if (b.dataset.productEdit) {
+    const product = products.find(p => p.id === Number(b.dataset.productEdit));
+    for (const [k,v] of Object.entries(product)) $('#productForm').elements.namedItem(k).value = v;
+  }
   if (b.dataset.supplierEdit) {
     const supplier = suppliers.find(s => s.id === Number(b.dataset.supplierEdit));
-    for (const [k,v] of Object.entries(supplier)) $('#supplierForm').elements.namedItem(k).value = v;
+    for (const [k,v] of Object.entries(supplier)) if ($('#supplierForm').elements.namedItem(k)) $('#supplierForm').elements.namedItem(k).value = v;
   }
 });
 $('#search').oninput = render; $('#statusFilter').onchange = render;
@@ -197,17 +235,17 @@ function preparePrint() {
   return true;
 }
 function preview(s) {
-  const party = (title, company, phone, address, extra) => `<div class="party"><b>${title}</b><div><strong>${esc(company||'—')}</strong><p>${esc(phone||'')}</p><p>${esc(address||'')}</p><p>${esc(extra||'')}</p></div></div>`;
+  const party = (title, company, phone, manager = '') => `<div class="party"><b>${title}</b><div><strong>${esc(company||'—')}</strong><p>전화번호 ${esc(phone||'—')}</p>${manager ? `<p>담당자 ${esc(manager)}</p>` : ''}</div></div>`;
   const copy = label => `<section class="slip"><div class="slip-content">
     <div class="slip-title"><div><h1>AS 입출고 전표</h1><p>${esc(s.kind)} · ${esc(s.status)}</p></div><span>${label} 보관용</span></div>
     <div class="slip-meta"><strong>${esc(s.number)}</strong><span>접수일 ${esc(s.date)}</span></div>
-    <div class="parties">${party('공급자',s.supplier,s.phone,s.supplierAddress,'')}${party('공급받는자',s.company,s.companyPhone,s.address,[s.business,s.manager].filter(Boolean).join(' / '))}</div>
-    <table class="print-table"><thead><tr><th>품목 / 모델명</th><th>시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}<br><small>${esc(i.model)}</small></td><td>${esc(i.serial)}</td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>
+    <div class="parties">${party('받는이',s.supplier,s.phone)}${party('보낸이',s.company,s.companyPhone,s.manager)}</div>
+    <table class="print-table"><thead><tr><th>품명</th><th>시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.serial)}</td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>
     <div class="slip-result"><span>합계 수량 <b>${s.items.reduce((n,i)=>n+Number(i.qty),0)}</b></span><span>반환일 ${esc(s.returned||'—')}</span><span>처리 결과 ${esc(s.result||'—')}</span></div>
     <p class="slip-note"><b>비고</b> ${esc(s.note||'—')}</p>
     <div class="signatures"><span>인계자 __________________ (서명)</span><span>인수자 __________________ (서명)</span></div>
   </div></section>`;
-  $('#paper').innerHTML = copy('공급자') + '<div class="cut">절 취 선</div>' + copy('공급받는자');
+  $('#paper').innerHTML = copy('받는이') + '<div class="cut">절 취 선</div>' + copy('보낸이');
   $('#preview').showModal();
   fitSlips($('#paper'));
   document.fonts.ready.then(() => { if ($('#preview').open) fitSlips($('#paper')); });
@@ -218,6 +256,6 @@ $('#printBtn').onclick = async () => {
   if (preparePrint()) window.print();
 };
 (async () => {
-  try { settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); await reload(); }
+  try { settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); products = await api('/api/products'); await reload(); }
   catch (e) { toast('서버 연결 오류: ' + e.message); }
 })();
