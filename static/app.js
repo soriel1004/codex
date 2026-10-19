@@ -462,7 +462,6 @@ function preview(s) {
     <div class="parties">${party('받는이',s.supplier,s.phone)}${party('보낸이',s.company,s.companyPhone,s.manager)}</div>
     <table class="print-table"><thead><tr><th>품명</th><th>출고 시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.serial||'')}</td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>
     <div class="slip-result"><span>합계 수량 <b>${s.items.reduce((n,i)=>n+Number(i.qty),0)}</b></span></div>
-    <p class="slip-note"><b>비고</b> ${esc(s.note||'—')}</p>
     <div class="signatures"><span>인계자 __________________ (서명)</span><span>인수자 __________________ (서명)</span></div>
   </div></section>`;
   $('#paper').innerHTML = copy('받는이') + '<div class="cut">절 취 선</div>' + copy('보낸이');

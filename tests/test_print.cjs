@@ -75,7 +75,9 @@ const {spawn, execFileSync} = require('node:child_process');
       assert.match(info,/Pages:\s+1\b/,`${name}: must be one page`);
       assert.match(info,/Page size:.*A4/,`${name}: must be A4`);
       const text=execFileSync('pdftotext',['-raw',file,'-'],{encoding:'utf8'}).replace(/\s/g,'');
-      assert.equal(text.split('TAIL-NOTE-OK').length-1,2,`${name}: both notes must survive`);
+      assert.ok(!text.includes('TAIL-NOTE-OK')&&!text.includes('비고'),`${name}: notes and note label must not print`);
+      assert.equal(text.split('인계자').length-1,2,`${name}: both sender signatures must survive`);
+      assert.equal(text.split('인수자').length-1,2,`${name}: both recipient signatures must survive`);
       assert.equal(text.split('LAST-FAULT-END').length-1,2,`${name}: last item's symptom must survive`);
       for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','COURIER-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고월','송장번호','공급자','공급받는자','생산년월','입고시리얼번호','입고처리','입고일','2025-09','000NEW-PRINT','NEW-SERIAL-','RECEIPT-RESULT-PRIVATE','2026-10-25','REPAIR-REPORT-PRIVATE','M/B수리내역서']) {
         assert.ok(!text.includes(hidden),`${name}: must not print ${hidden}`);

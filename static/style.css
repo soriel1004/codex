@@ -47,7 +47,6 @@
 .print-table td small { display: inline; color: #444; font-size: 9px; margin: 0; }
 .slip-result { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; margin-top: 9px; font-size: 10px; overflow-wrap: anywhere; }
 .slip-result > span { min-width: 0; max-width: 100%; }
-.slip-note { font-size: 10px; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.4; }
 .signatures { display: flex; justify-content: space-around; gap: 8px; margin-top: 12px; font-size: 11px; }
 .cut { height: 5mm; border-top: 1px dashed #aaa; text-align: center; color: #999; font-size: 9px; letter-spacing: 5px; padding: 1mm; }
 @page { size: A4 portrait; margin: 12mm; }

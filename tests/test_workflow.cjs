@@ -230,7 +230,7 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.ok(!proof.includes('CJ대한통운'));
     assert.ok(proof.includes('받는이 보관용')&&proof.includes('보낸이 보관용'));
     assert.deepEqual(await page.locator('#paper .print-table').first().locator('th').allTextContents(),['품명','출고 시리얼번호','수량','불량 증상']);
-    for (const hidden of ['2026-02-28','출고 월','0000123456789','송장번호','모델명','사업자','주소','생산 년월','입고 시리얼번호','입고처리','입고일','2025-09','000NEW-A',customTreatment,repairReport,'M/B 수리내역서']) assert.ok(!proof.includes(hidden));
+    for (const hidden of ['2026-02-28','출고 월','0000123456789','송장번호','모델명','사업자','주소','생산 년월','입고 시리얼번호','입고처리','입고일','2025-09','000NEW-A',customTreatment,repairReport,'M/B 수리내역서','비고','부분반환 이력 유지']) assert.ok(!proof.includes(hidden));
     await page.pdf({path:path.join(temp,'workflow.pdf'),preferCSSPageSize:true});
     const text=execFileSync('pdftotext',['-raw',path.join(temp,'workflow.pdf'),'-'],{encoding:'utf8'});
     assert.ok(!text.includes('0000123456789')&&!text.includes('2026-02-28'));
