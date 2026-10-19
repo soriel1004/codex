@@ -95,7 +95,7 @@
 
 .history-heading{flex-wrap:wrap}.history-heading label{flex:1;min-width:140px;margin-top:0}
 
-.bottom-settings{display:flex;justify-content:flex-end;margin-top:15px}.receipt-fields{border-top:1px solid #dce2eb;margin-top:22px;padding-top:8px}#receiptOptionsManager{width:650px}.history-bottom{margin:14px 0 0;padding-top:12px;border-top:1px solid #e4e9f1}.history-bottom span{flex:none}
+.receipt-fields{border-top:1px solid #dce2eb;margin-top:22px;padding-top:8px}#receiptOptionsManager{width:650px}.history-bottom{margin:14px 0 0;padding-top:12px;border-top:1px solid #e4e9f1}.history-bottom span{flex:none}
 
 #editorReceiptSerials{margin-top:22px;padding-top:10px;border-top:1px solid #e4e9f1}.editor-receipt-row{background:#f6f9ff;border:1px solid #dce7fc;border-radius:7px;padding:14px;margin:10px 0}.editor-receipt-row>strong{display:block;font-size:13px;margin-bottom:12px}.editor-receipt-row input,.editor-receipt-row textarea{background:white;color:#253344}.editor-receipt-row textarea{white-space:pre-wrap;overflow-wrap:anywhere;resize:vertical}
 
