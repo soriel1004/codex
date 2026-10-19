@@ -60,6 +60,8 @@ def normalize(r):
         item.setdefault('productionMonth', '')
         item['sourceIndex'] = i
         item['receivedSerial'] = '\n'.join(x.get('receivedSerial', '') for event in r['returns'] for x in event['items'] if x['index'] == i and x.get('receivedSerial'))
+        item['mbRepairReport'] = '\n'.join(event['mbRepairReport'] for event in r['returns']
+                                         if event.get('mbRepairReport') and any(x['index'] == i for x in event['items']))
         item['returnedQty'] = sum(int(x['qty']) for event in r['returns'] for x in event['items'] if x['index'] == i)
         item['remainingQty'] = int(item['qty']) - item['returnedQty']
         received = [(index, event) for index, event in enumerate(r['returns']) if any(x['index'] == i for x in event['items'])]
@@ -145,18 +147,29 @@ def clean_received_serial(value):
     return value.strip()
 
 
+def clean_mb_repair_report(value):
+    if not isinstance(value, str) or len(value) > 2000:
+        raise ValueError('M/B 수리내역서는 2000자 이내로 입력하세요.')
+    return value.strip()
+
+
 def update_return_serials(r, data, c=None):
     event_index = data.get('eventIndex')
     if type(event_index) is not int or not 0 <= event_index < len(r['returns']):
         raise ValueError('반환 이력을 선택하세요.')
     event = r['returns'][event_index]
     treatment = receipt_treatment(data.get('result', event.get('result', '')), event.get('result', ''), c)
+    report = clean_mb_repair_report(data.get('mbRepairReport', event.get('mbRepairReport', '')))
     updates = data.get('items', [])
     indexes = [x.get('index') for x in updates]
     if any(type(i) is not int for i in indexes) or len(set(indexes)) != len(indexes) or set(indexes) != {x['index'] for x in event['items']}:
         raise ValueError('반환 이력의 품목이 일치하지 않습니다.')
     serials = {x['index']: clean_received_serial(x.get('receivedSerial', '')) for x in updates}
     event['result'] = treatment
+    if report:
+        event['mbRepairReport'] = report
+    else:
+        event.pop('mbRepairReport', None)
     for item in event['items']:
         item['receivedSerial'] = serials[item['index']]
     r['version'] += 1
@@ -166,6 +179,7 @@ def update_return_serials(r, data, c=None):
 def apply_return(r, data, c=None):
     date = valid_date(data.get('date', ''))
     treatment = receipt_treatment(data.get('result', ''), c=c)
+    report = clean_mb_repair_report(data.get('mbRepairReport', ''))
     if date < r['date']:
         raise ValueError('반환일은 접수일 이후여야 합니다.')
     selected = ([{'index': i, 'qty': item['remainingQty']} for i,item in enumerate(r['items']) if item['remainingQty']]
@@ -182,7 +196,7 @@ def apply_return(r, data, c=None):
             raise ValueError('반환 수량은 미반환 수량 이내의 정수여야 합니다.')
         serial = clean_received_serial(x.get('receivedSerial', ''))
         seen.add(i); clean.append({'index': i, 'qty': qty, **({'receivedSerial': serial} if serial else {})})
-    r['returns'].append({'date': date, 'result': treatment, 'items': clean})
+    r['returns'].append({'date': date, 'result': treatment, 'items': clean, **({'mbRepairReport':report} if report else {})})
     r['result'] = treatment
     r['version'] += 1
     return normalize(r)
@@ -219,14 +233,17 @@ def editor_returns(old, data, items, c):
             date = valid_date(edit.get('date', ''))
             previous_index = edit.get('eventIndex')
             previous = ''
+            previous_report = ''
             if previous_index is not None:
                 if type(previous_index) is not int or not 0 <= previous_index < len(old['returns']):
                     raise ValueError('입고내역의 원본 연결이 올바르지 않습니다.')
                 previous = old['returns'][previous_index].get('result', '')
+                previous_report = old['returns'][previous_index].get('mbRepairReport', '')
             treatment = receipt_treatment(edit.get('result', ''), previous, c)
             serial = clean_received_serial(edit.get('receivedSerial', ''))
-            key = (previous_index if previous_index is not None else f'new-{order}', date, treatment)
-            event = groups.setdefault(key, {'date':date, 'result':treatment, 'items':[]})
+            report = clean_mb_repair_report(edit.get('mbRepairReport', previous_report))
+            key = (previous_index if previous_index is not None else f'new-{order}', date, treatment, report)
+            event = groups.setdefault(key, {'date':date, 'result':treatment, 'items':[], **({'mbRepairReport':report} if report else {})})
             if any(entry['index'] == index for entry in event['items']):
                 raise ValueError('같은 입고내역의 품목이 중복되었습니다.')
             event['items'].append({'index':index, 'qty':qty, **({'receivedSerial':serial} if serial else {})})
@@ -251,7 +268,7 @@ def editor_returns(old, data, items, c):
 def xlsx(rows):
     headers = ['전표번호', '접수일 (출고일)', '출고월', '택배사', '출고 송장번호',
                '의뢰업체', '받는이', '보낸이', '품명', '생산 년월', '출고 시리얼번호',
-               '입고 시리얼번호', '수량', '불량 증상', '구분', '진행상태', '비고',
+               '입고 시리얼번호', '비고', 'M/B 수리내역서 작성', '수량', '불량 증상', '구분', '진행상태',
                '반환수량', '미반환수량', '경과일수', '입고처리', '입고일']
     table = [headers]
     for r in rows:
@@ -260,8 +277,8 @@ def xlsx(rows):
                 r['number'], r['date'], r.get('shippedMonth', ''),
                 r.get('courier', ''), r.get('trackingNumber', ''), ' · '.join(r.get('requesters', [])),
                 r['supplier'], r.get('company', ''), item.get('name', ''), item.get('productionMonth', ''),
-                item.get('serial', ''), item.get('receivedSerial', ''), item.get('qty', 1),
-                item.get('fault', ''), r['kind'], r['status'], r.get('note', ''), item['returnedQty'],
+                item.get('serial', ''), item.get('receivedSerial', ''), r.get('note', ''), item.get('mbRepairReport', ''), item.get('qty', 1),
+                item.get('fault', ''), r['kind'], r['status'], item['returnedQty'],
                 item['remainingQty'], item['elapsedDays'], item.get('receiptTreatment', ''), item.get('receivedDate', '')])
     def col(i):
         s = ''

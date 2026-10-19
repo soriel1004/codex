@@ -131,7 +131,7 @@ $('#receiptDate').onchange = $('#receiptDate').oninput;
 function addEditorReceiptEntry(card, entry = {}, eventIndex = null) {
   const row = document.createElement('div'); row.className = 'editor-receipt-entry';
   row.dataset.eventIndex = eventIndex ?? '';
-  row.innerHTML = `<div class="form-grid"><label>입고일<input type="date" data-receipt-field="date" value="${esc(entry.date||today())}" required></label><label>입고수량<input type="number" min="1" max="99999" data-receipt-field="qty" value="${esc(entry.qty||1)}" required></label></div><label>변경된 입고 시리얼번호<textarea data-receipt-field="receivedSerial" maxlength="400" rows="3" placeholder="교환 시 입력 · 동일 제품은 빈칸">${esc(entry.receivedSerial||'')}</textarea></label><label>입고처리<select data-receipt-field="result">${receiptOptionsHtml(entry.result||'')}</select></label><button type="button" class="remove-receipt">입고내역 삭제</button>`;
+  row.innerHTML = `<div class="form-grid"><label>입고일<input type="date" data-receipt-field="date" value="${esc(entry.date||today())}" required></label><label>입고수량<input type="number" min="1" max="99999" data-receipt-field="qty" value="${esc(entry.qty||1)}" required></label></div><label>변경된 입고 시리얼번호<textarea data-receipt-field="receivedSerial" maxlength="400" rows="3" placeholder="교환 시 입력 · 동일 제품은 빈칸">${esc(entry.receivedSerial||'')}</textarea></label><label class="mb-report-field">M/B 수리내역서 작성<textarea data-receipt-field="mbRepairReport" maxlength="2000" rows="3" placeholder="해당 입고내역의 M/B 수리 내용 (선택 사항)">${esc(entry.mbRepairReport||'')}</textarea></label><label>입고처리<select data-receipt-field="result">${receiptOptionsHtml(entry.result||'')}</select></label><button type="button" class="remove-receipt">입고내역 삭제</button>`;
   row.querySelector('.remove-receipt').onclick = () => { row.remove(); syncEditorStatus(); };
   row.querySelector('[data-receipt-field=qty]').oninput = syncEditorStatus;
   row.querySelector('[data-receipt-field=date]').oninput = updateEditorElapsed;
@@ -143,7 +143,7 @@ function addEditorReceiptCard(tr, item) {
   card.innerHTML = `<strong>${esc(item.name||'추가 품목')}</strong><div class="editor-receipt-entries"></div><button type="button" class="add-editor-receipt">입고내역 추가</button>`;
   $('#editorReceiptSerialRows').append(card);
   editing.returns.forEach((event,eventIndex) => {
-    event.items.filter(x => x.index === item.sourceIndex).forEach(x => addEditorReceiptEntry(card,{...x,date:event.date,result:event.result},eventIndex));
+    event.items.filter(x => x.index === item.sourceIndex).forEach(x => addEditorReceiptEntry(card,{...x,date:event.date,result:event.result,mbRepairReport:event.mbRepairReport},eventIndex));
   });
   syncEditorStatus();
   card.querySelector('.add-editor-receipt').onclick = () => {
@@ -203,7 +203,7 @@ $('#slipForm').onsubmit = async e => {
   data.items = itemRows.map(tr=>({...Object.fromEntries([...tr.querySelectorAll('[data-key]')].map(i=>[i.dataset.key,i.value])),sourceIndex:tr.dataset.sourceIndex === '' ? null : Number(tr.dataset.sourceIndex)}));
   if (editing) data.receiptEdits = itemRows.flatMap((tr,index)=>{
     const card=$('#editorReceiptSerialRows').querySelector(`[data-row-key="${tr.dataset.rowKey}"]`);
-    return [...card.querySelectorAll('.editor-receipt-entry')].map(row=>({index,eventIndex:row.dataset.eventIndex === '' ? null : Number(row.dataset.eventIndex),date:row.querySelector('[data-receipt-field=date]').value,qty:Number(row.querySelector('[data-receipt-field=qty]').value),result:row.querySelector('[data-receipt-field=result]').value,receivedSerial:row.querySelector('[data-receipt-field=receivedSerial]').value}));
+    return [...card.querySelectorAll('.editor-receipt-entry')].map(row=>({index,eventIndex:row.dataset.eventIndex === '' ? null : Number(row.dataset.eventIndex),date:row.querySelector('[data-receipt-field=date]').value,qty:Number(row.querySelector('[data-receipt-field=qty]').value),result:row.querySelector('[data-receipt-field=result]').value,receivedSerial:row.querySelector('[data-receipt-field=receivedSerial]').value,mbRepairReport:row.querySelector('[data-receipt-field=mbRepairReport]').value}));
   });
   if (!data.company) return toast('먼저 보낸이 설정에서 업체명을 입력하세요.');
   const btn = e.submitter; btn.disabled = true;
@@ -331,13 +331,13 @@ function openReturn(s, all = false) {
   renderReturnHistory(s);
   $('#returnSave').hidden = done; $('#selectRemaining').hidden = done || all;
   $('#returnSave').textContent = all ? '전량 반환 저장' : '선택 품목 반환 저장';
-  form.elements.date.disabled = done; form.elements.result.disabled = done;
+  form.elements.date.disabled = done; form.elements.result.disabled = done; form.elements.mbRepairReport.disabled = done;
   $('#returnDialog').showModal();
   $('#returnDialog').scrollTop = 0;
   if (!done) $('#returnItems textarea:not(:disabled)')?.focus({preventScroll:true});
 }
 function renderReturnHistory(s) {
-  $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><b>${esc(event.date)}</b>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label>`).join('')}<div class="history-heading history-bottom"><label>입고처리<select data-history-result>${receiptOptionsHtml(event.result||'')}</select></label><span>입고일 ${esc(event.date)}</span><button type="button" data-save-serials="${eventIndex}">입고정보 저장</button></div></div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
+  $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><b>${esc(event.date)}</b>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label>`).join('')}<label class="mb-report-field">M/B 수리내역서 작성<textarea data-history-report maxlength="2000" rows="3" placeholder="이 반환 이력의 M/B 수리 내용 (선택 사항)">${esc(event.mbRepairReport||'')}</textarea></label><div class="history-heading history-bottom"><label>입고처리<select data-history-result>${receiptOptionsHtml(event.result||'')}</select></label><span>입고일 ${esc(event.date)}</span><button type="button" data-save-serials="${eventIndex}">입고정보 저장</button></div></div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
 }
 $('#selectRemaining').onclick = () => {
   $('#returnItems').querySelectorAll('input[type=checkbox]:not(:disabled)').forEach(c => {
@@ -354,7 +354,7 @@ $('#returnForm').onsubmit = async e => {
   const items = [...$('#returnItems').querySelectorAll('tr')].filter(tr => tr.querySelector('[type=checkbox]').checked).map(tr => ({index:Number(tr.dataset.index), qty:Number(tr.querySelector('[type=number]').value), receivedSerial:tr.querySelector('textarea').value}));
   if (!items.length) return toast('반환할 품목을 선택하세요.');
   const btn = e.submitter; btn.disabled = true;
-  try { await saveReturn(returning, {date:e.target.elements.date.value, result:e.target.elements.result.value, items}); $('#returnDialog').close(); }
+  try { await saveReturn(returning, {date:e.target.elements.date.value, result:e.target.elements.result.value, mbRepairReport:e.target.elements.mbRepairReport.value, items}); $('#returnDialog').close(); }
   catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };
 document.addEventListener('click', async e => {
@@ -375,9 +375,10 @@ document.addEventListener('click', async e => {
     const event = b.closest('[data-event]');
     const items = [...event.querySelectorAll('[data-history-index]')].map(input => ({index:Number(input.dataset.historyIndex),receivedSerial:input.value}));
     try {
-      returning = await api('/api/return-serials', {id:returning.id,version:returning.version,eventIndex:Number(b.dataset.saveSerials),result:event.querySelector('[data-history-result]').value,items});
+      returning = await api('/api/return-serials', {id:returning.id,version:returning.version,eventIndex:Number(b.dataset.saveSerials),result:event.querySelector('[data-history-result]').value,mbRepairReport:event.querySelector('[data-history-report]').value,items});
       await reload();
       const saved = returning.returns[Number(b.dataset.saveSerials)];
+      event.querySelector('[data-history-report]').value = saved.mbRepairReport || '';
       event.querySelectorAll('[data-history-index]').forEach(input => {
         input.value = saved.items.find(x => x.index === Number(input.dataset.historyIndex)).receivedSerial || '';
       });

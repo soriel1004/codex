@@ -26,7 +26,7 @@ const {spawn, execFileSync} = require('node:child_process');
     browser = await chromium.launch({headless:true, ...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
     const basic = {
       number:'AS-PRINT-TEST', date:'2026-10-19', kind:'AS 발송', status:'반환완료',
-      result:'RECEIPT-RESULT-PRIVATE', returned:'2026-10-25',
+      mbRepairReport:'REPAIR-REPORT-PRIVATE', result:'RECEIPT-RESULT-PRIVATE', returned:'2026-10-25',
       supplier:'공급사', company:'내 업체', phone:'010-1234-5678', companyPhone:'02-123-4567',
       shippedDate:'2031-12-24',shippedMonth:'12월',trackingNumber:'0000-TRACKING-PRIVATE',courier:'COURIER-PRIVATE',requesters:['GN','대일'],
       items:[{name:'메모리 DDR5',model:'MODEL-PRIVATE',serial:'001234',productionMonth:'2025-09',receivedSerial:'000NEW-PRINT',qty:2,returnedQty:0,fault:'부팅 불가 LAST-FAULT-END'}],
@@ -77,7 +77,7 @@ const {spawn, execFileSync} = require('node:child_process');
       const text=execFileSync('pdftotext',['-raw',file,'-'],{encoding:'utf8'}).replace(/\s/g,'');
       assert.equal(text.split('TAIL-NOTE-OK').length-1,2,`${name}: both notes must survive`);
       assert.equal(text.split('LAST-FAULT-END').length-1,2,`${name}: last item's symptom must survive`);
-      for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','COURIER-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고월','송장번호','공급자','공급받는자','생산년월','입고시리얼번호','입고처리','입고일','2025-09','000NEW-PRINT','NEW-SERIAL-','RECEIPT-RESULT-PRIVATE','2026-10-25']) {
+      for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','COURIER-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고월','송장번호','공급자','공급받는자','생산년월','입고시리얼번호','입고처리','입고일','2025-09','000NEW-PRINT','NEW-SERIAL-','RECEIPT-RESULT-PRIVATE','2026-10-25','REPAIR-REPORT-PRIVATE','M/B수리내역서']) {
         assert.ok(!text.includes(hidden),`${name}: must not print ${hidden}`);
       }
       assert.ok(text.includes('받는이보관용') && text.includes('보낸이보관용'),`${name}: updated party labels`);

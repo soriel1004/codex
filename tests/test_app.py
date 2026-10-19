@@ -396,6 +396,7 @@ class Workflow(unittest.TestCase):
             self.assertEqual(headers[:5], ['전표번호','접수일 (출고일)','출고월','택배사','출고 송장번호'])
             out_index = headers.index('출고 시리얼번호')
             self.assertEqual(headers[out_index + 1], '입고 시리얼번호')
+            self.assertEqual(headers[out_index + 2:out_index + 4], ['비고','M/B 수리내역서 작성'])
             self.assertEqual(headers[-2:], ['입고처리','입고일'])
             for forbidden in ('받는이 전화번호','보낸이 전화번호','품명별 반환이력','처리 결과','최근 반환일'):
                 self.assertNotIn(forbidden, headers)
@@ -408,7 +409,7 @@ class Workflow(unittest.TestCase):
             self.assertEqual(second['입고일'], '2026-10-21')
             self.assertIsNone(pending['입고일'])
             validation = root.find('s:dataValidations/s:dataValidation', ns)
-            self.assertEqual(validation.attrib['sqref'], 'U2:U4')
+            self.assertEqual(validation.attrib['sqref'], 'V2:V4')
             self.assertEqual(validation.attrib['type'], 'list')
             self.assertEqual(validation.find('s:formula1', ns).text, 'ReceiptOptions')
             choices_sheet = ET.fromstring(z.read('xl/worksheets/sheet2.xml'))
@@ -426,6 +427,63 @@ class Workflow(unittest.TestCase):
         self.assertEqual(s['items'][0]['receiptTreatment'], '수리')
         self.assertEqual(s['items'][0]['receivedDate'], '2026-10-20')
         self.assertEqual(s['status'], '반환완료')
+
+    def test_mb_report_partial_full_returns_history_correction_and_excel(self):
+        s = self.create()
+        s['note'] = '=비고 <기록>\n둘째 줄'
+        s = self.post('/api/slips', s)
+        report = '전원부 <교체> & 점검\n부팅 정상'
+        s = self.ret(s, items=[{'index':0,'qty':1},{'index':2,'qty':1}], mbRepairReport=report)
+        self.assertEqual(s['items'][0]['mbRepairReport'], report)
+        self.assertEqual(s['items'][2]['mbRepairReport'], report)
+        self.assertEqual(s['items'][1]['mbRepairReport'], '')
+        s = self.ret(s, items=[{'index':0,'qty':1}], mbRepairReport='추가 수리')
+        self.assertEqual(s['items'][0]['mbRepairReport'], report+'\n추가 수리')
+        s = self.ret(s, all=True)
+        self.assertEqual(s['items'][0]['mbRepairReport'], report+'\n추가 수리')
+        corrected = '=수정 내역 <확인>\n둘째 줄'
+        s = self.post('/api/return-serials', {'id':s['id'],'version':s['version'],'eventIndex':0,
+                      'mbRepairReport':corrected,'items':[{'index':0},{'index':2}]})
+        self.assertEqual(s['items'][0]['mbRepairReport'], corrected+'\n추가 수리')
+        self.assertEqual(s['items'][2]['mbRepairReport'], corrected)
+        s = self.post('/api/slips', s)
+        self.assertEqual(self.get('/api/slips')[0]['returns'], s['returns'])
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            rows = [[c.find('s:is/s:t',ns).text for c in row] for row in root.findall('s:sheetData/s:row',ns)]
+            index = rows[0].index('입고 시리얼번호')
+            self.assertEqual(rows[0][index:index+3], ['입고 시리얼번호','비고','M/B 수리내역서 작성'])
+            first, second, third = [dict(zip(rows[0],row)) for row in rows[1:]]
+            self.assertEqual(first['비고'], s['note'])
+            self.assertEqual(first['M/B 수리내역서 작성'], corrected+'\n추가 수리')
+            self.assertIsNone(second['M/B 수리내역서 작성'])
+            self.assertEqual(third['M/B 수리내역서 작성'], corrected)
+            self.assertEqual(root.findall('.//s:f',ns), [])
+
+    def test_mb_report_editor_preserves_splits_and_clears_per_item(self):
+        s = self.ret(self.create(),all=True,mbRepairReport='공통 수리내역')
+        s['receiptEdits'] = [{'index':i,'eventIndex':0,'date':'2026-10-20','qty':int(item['qty']),'result':''}
+                             for i,item in enumerate(s['items'])]
+        s = self.post('/api/slips',s)
+        self.assertEqual([i['mbRepairReport'] for i in s['items']], ['공통 수리내역']*3)
+        s['receiptEdits'] = [{'index':i,'eventIndex':0,'date':'2026-10-20','qty':int(item['qty']),'result':'',
+                             'mbRepairReport':['개별 수정','','공통 수리내역'][i]}
+                            for i,item in enumerate(s['items'])]
+        s = self.post('/api/slips',s)
+        self.assertEqual([i['mbRepairReport'] for i in s['items']], ['개별 수정','','공통 수리내역'])
+        self.assertEqual(s['status'],'반환완료')
+
+    def test_mb_report_invalid_input_does_not_change_saved_records(self):
+        s = self.create()
+        for report in ('X'*2001, None, True, []):
+            self.assert_error(400,'/api/returns', {'id':s['id'],'version':s['version'],'date':'2026-10-20',
+                              'all':True,'mbRepairReport':report})
+        self.assertEqual(self.get('/api/slips')[0]['returns'], [])
+        s = self.ret(s,all=True,mbRepairReport='유지할 수리내역')
+        self.assert_error(400,'/api/return-serials',{'id':s['id'],'version':s['version'],'eventIndex':0,
+                          'mbRepairReport':'X'*2001,'items':[{'index':i} for i in range(3)]})
+        self.assertEqual(self.get('/api/slips')[0]['items'][0]['mbRepairReport'],'유지할 수리내역')
 
     def test_custom_receipt_options_crud_preserves_history_and_empty_list(self):
         name = '유상 교환 완료'
