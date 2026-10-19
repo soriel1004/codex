@@ -155,8 +155,68 @@ document.addEventListener('click', async e => {
   }
 });
 $('#search').oninput = render; $('#statusFilter').onchange = render;
-function preview(s){const party=(title,company,phone,address,extra)=>`<div class="party"><b>${title}</b><div><strong>${esc(company||'—')}</strong><p>${esc(phone||'')}</p><p>${esc(address||'')}</p><p>${esc(extra||'')}</p></div></div>`;const copy=label=>`<section class="slip"><div class="slip-title"><div><h1>AS 입출고 전표</h1><p>${esc(s.kind)} · ${esc(s.status)}</p></div><span>${label} 보관용</span></div><div class="slip-meta"><strong>${esc(s.number)}</strong><span>접수일 ${esc(s.date)}</span></div><div class="parties">${party('공급자',s.supplier,s.phone,s.supplierAddress,'')}${party('공급받는자',s.company,s.companyPhone,s.address,[s.business,s.manager].filter(Boolean).join(' / '))}</div><table class="print-table"><thead><tr><th>품목 / 모델명</th><th>시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}<br><small>${esc(i.model)}</small></td><td>${esc(i.serial)}</td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table><div class="slip-result"><span>합계 수량 <b>${s.items.reduce((n,i)=>n+Number(i.qty),0)}</b></span><span>반환일 ${esc(s.returned||'—')}</span><span>처리 결과 ${esc(s.result||'—')}</span></div><p class="slip-note"><b>비고</b> ${esc(s.note||'—')}</p><div class="signatures"><span>인계자 __________________ (서명)</span><span>인수자 __________________ (서명)</span></div></section>`;$('#paper').innerHTML=copy('공급자')+'<div class="cut">절 취 선</div>'+copy('공급받는자');$('#preview').showModal();}
-$('#printBtn').onclick = () => window.print();
+// Use the same physical half-sheet dimensions for the proof and printed copies.
+function fitSlips(root) {
+  root.querySelectorAll('.slip').forEach(slip => {
+    const content = slip.querySelector('.slip-content');
+    const style = getComputedStyle(slip);
+    const width = slip.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    const height = slip.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+    const apply = scale => {
+      // Compensate for scaling so the table keeps using the full printable width.
+      // This lets long text reflow and preserves a larger, more readable font.
+      content.style.width = `${(width - 1) / scale}px`;
+      content.style.transform = `scale(${scale})`;
+      return Math.max(content.scrollHeight * scale, content.getBoundingClientRect().height) <= height - 1
+        && content.scrollWidth * scale <= width;
+    };
+    if (apply(1)) return;
+    let low = 0.01, high = 1;
+    for (let i = 0; i < 16; i++) {
+      const mid = (low + high) / 2;
+      if (apply(mid)) low = mid; else high = mid;
+    }
+    apply(low);
+  });
+}
+function preparePrint() {
+  const paper = $('#paper');
+  if (!paper.children.length) return false;
+  let root = $('#print-root');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'print-root';
+    root.setAttribute('aria-hidden', 'true');
+    document.body.append(root);
+  }
+  root.innerHTML = paper.innerHTML;
+  // Measure at the same width even before the browser enters print media.
+  root.style.display = 'block';
+  fitSlips(root);
+  root.style.removeProperty('display');
+  return true;
+}
+function preview(s) {
+  const party = (title, company, phone, address, extra) => `<div class="party"><b>${title}</b><div><strong>${esc(company||'—')}</strong><p>${esc(phone||'')}</p><p>${esc(address||'')}</p><p>${esc(extra||'')}</p></div></div>`;
+  const copy = label => `<section class="slip"><div class="slip-content">
+    <div class="slip-title"><div><h1>AS 입출고 전표</h1><p>${esc(s.kind)} · ${esc(s.status)}</p></div><span>${label} 보관용</span></div>
+    <div class="slip-meta"><strong>${esc(s.number)}</strong><span>접수일 ${esc(s.date)}</span></div>
+    <div class="parties">${party('공급자',s.supplier,s.phone,s.supplierAddress,'')}${party('공급받는자',s.company,s.companyPhone,s.address,[s.business,s.manager].filter(Boolean).join(' / '))}</div>
+    <table class="print-table"><thead><tr><th>품목 / 모델명</th><th>시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}<br><small>${esc(i.model)}</small></td><td>${esc(i.serial)}</td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>
+    <div class="slip-result"><span>합계 수량 <b>${s.items.reduce((n,i)=>n+Number(i.qty),0)}</b></span><span>반환일 ${esc(s.returned||'—')}</span><span>처리 결과 ${esc(s.result||'—')}</span></div>
+    <p class="slip-note"><b>비고</b> ${esc(s.note||'—')}</p>
+    <div class="signatures"><span>인계자 __________________ (서명)</span><span>인수자 __________________ (서명)</span></div>
+  </div></section>`;
+  $('#paper').innerHTML = copy('공급자') + '<div class="cut">절 취 선</div>' + copy('공급받는자');
+  $('#preview').showModal();
+  fitSlips($('#paper'));
+  document.fonts.ready.then(() => { if ($('#preview').open) fitSlips($('#paper')); });
+}
+window.addEventListener('beforeprint', preparePrint);
+$('#printBtn').onclick = async () => {
+  await document.fonts.ready;
+  if (preparePrint()) window.print();
+};
 (async () => {
   try { settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); await reload(); }
   catch (e) { toast('서버 연결 오류: ' + e.message); }
