@@ -105,3 +105,5 @@
 
 /* Tracking controls stay with outbound shipping details, outside return actions. */
 td .tracking-link{display:inline-block;margin-top:8px;font-size:11px;padding:6px 9px;color:#2863df}#trackingDialog{width:min(480px,94vw)}#trackingDialog label{margin-top:15px}.tracking-link[hidden]{display:none}a.button.primary{background:#2863df;color:white;border-color:#2863df}
+
+.row-action-buttons{display:grid;grid-template-columns:repeat(2,max-content);gap:6px;justify-content:start}.row-action-buttons button{margin:0}
