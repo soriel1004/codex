@@ -4,6 +4,17 @@ let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const total = (s, key) => s.items.reduce((n, i) => n + Number(i[key] || 0), 0);
+const headerDateFormat = new Intl.DateTimeFormat('ko-KR', {timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',weekday:'long'});
+const headerTimeFormat = new Intl.DateTimeFormat('ko-KR', {timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+function updateHeaderClock() {
+  const now = new Date();
+  $('#headerClock').dateTime = now.toISOString();
+  $('#headerDate').textContent = headerDateFormat.format(now);
+  $('#headerTime').textContent = headerTimeFormat.format(now);
+}
+updateHeaderClock();
+setInterval(updateHeaderClock, 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) updateHeaderClock(); });
 const trackingCarriers = [
   {name:'CJ대한통운', aliases:['CJ대한통운','대한통운','CJ택배','CJ'], url:n => `https://trace.cjlogistics.com/web/detail.jsp?slipno=${n}`},
   {name:'한진택배', aliases:['한진택배','한진','HANJIN'], url:n => `https://www.hanjin.com/kor/CMS/DeliveryMgr/WaybillResult.do?mCode=MN038&wblnum=${n}`},

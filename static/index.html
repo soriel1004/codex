@@ -1,5 +1,5 @@
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>부품 AS · 전표 관리</title><link rel="stylesheet" href="/style.css"></head><body>
-<header><div class="brand"><span class="mark">↔</span><div>부품 AS <small>전표 · 입출고 관리</small></div></div><div class="header-actions"><button id="suppliersBtn">받는이 관리</button><button id="productsBtn">품명 관리</button><button id="settingsBtn">보낸이 설정</button><button id="receiptOptionsBtn">입고처리 목록관리</button><a class="button" href="/api/export">↓ 누적 엑셀 다운로드</a></div></header>
+<header><div class="header-clock"><time id="headerClock" aria-label="현재 날짜와 시간 (한국 시간)"><span id="headerDate"></span><span id="headerTime"></span></time></div><div class="header-actions"><button id="suppliersBtn">받는이 관리</button><button id="productsBtn">품명 관리</button><button id="settingsBtn">보낸이 설정</button><button id="receiptOptionsBtn">입고처리 목록관리</button><a class="button" href="/api/export">↓ 누적 엑셀 다운로드</a></div></header>
 <main><div class="heading"><div><h1>AS 업무</h1></div><button class="primary" id="newBtn">＋ 전표 작성</button></div>
 <section class="stats" id="stats"></section>
 <nav class="list-tabs" aria-label="목록 구분"><button class="active" data-view="active">진행 목록</button><button data-view="completed">완료 목록</button><button data-view="all">전체 목록</button></nav>
