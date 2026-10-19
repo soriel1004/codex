@@ -4,6 +4,42 @@ let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const total = (s, key) => s.items.reduce((n, i) => n + Number(i[key] || 0), 0);
+const trackingCarriers = [
+  {name:'CJ대한통운', aliases:['CJ대한통운','대한통운','CJ택배','CJ'], url:n => `https://trace.cjlogistics.com/web/detail.jsp?slipno=${n}`},
+  {name:'한진택배', aliases:['한진택배','한진','HANJIN'], url:n => `https://www.hanjin.com/kor/CMS/DeliveryMgr/WaybillResult.do?mCode=MN038&wblnum=${n}`},
+  {name:'롯데택배', aliases:['롯데택배','롯데','현대택배','LOTTE'], url:n => `https://www.lotteglogis.com/home/reservation/tracking/linkView?InvNo=${n}`},
+  {name:'우체국택배', aliases:['우체국택배','우체국','우체국소포','우체국등기','EPOST'], url:n => `https://service.epost.go.kr/trace.RetrieveDomRigiTraceList.comm?sid1=${n}`},
+  {name:'로젠택배', aliases:['로젠택배','로젠','LOGEN','ILOGEN'], url:n => `https://www.ilogen.com/web/personal/trace/${n}`}
+];
+const carrierKey = name => String(name || '').replace(/[\s()㈜]/g,'').toUpperCase();
+const trackingCarrier = name => trackingCarriers.find(c => c.aliases.some(a => carrierKey(a) === carrierKey(name)));
+const trackingDigits = number => String(number || '').replace(/[\s-]/g,'');
+function trackingUrl(carrier, number) {
+  const digits = trackingDigits(number);
+  return carrier && /^\d+$/.test(digits) ? carrier.url(encodeURIComponent(digits)) : '';
+}
+function trackingControl(s) {
+  if (s.status === '반환완료') return '';
+  if (!String(s.trackingNumber || '').trim()) return '<button class="tracking-link" disabled title="수정에서 출고 송장번호를 입력하세요">송장번호 미등록</button>';
+  const url = trackingUrl(trackingCarrier(s.courier), s.trackingNumber);
+  return url ? `<a class="button tracking-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(s.number)} 송장 조회 (새 창)">송장 조회 ↗</a>` : `<button class="tracking-link" data-track="${s.id}">송장 조회</button>`;
+}
+function openTracking(s) {
+  if (!/^\d+$/.test(trackingDigits(s.trackingNumber))) return toast('송장번호는 숫자와 하이픈, 공백만 사용할 수 있습니다. 전표 수정에서 확인하세요.');
+  $('#trackingNumber').value = s.trackingNumber;
+  $('#trackingSlip').textContent = `${s.number} · ${s.courier || '택배사 미등록'}`;
+  $('#trackingCarrier').innerHTML = '<option value="">택배사를 선택하세요</option>' + trackingCarriers.map(c => `<option>${esc(c.name)}</option>`).join('');
+  $('#trackingCarrier').value = trackingCarrier(s.courier)?.name || '';
+  updateTrackingLink();
+  $('#trackingDialog').showModal();
+}
+function updateTrackingLink() {
+  const url = trackingUrl(trackingCarrier($('#trackingCarrier').value), $('#trackingNumber').value);
+  $('#trackingOpen').hidden = !url;
+  if (url) $('#trackingOpen').href = url;
+  else $('#trackingOpen').removeAttribute('href');
+}
+$('#trackingCarrier').onchange = updateTrackingLink;
 async function api(path, data) {
   const r = await fetch(path, data ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)} : {});
   const j = await r.json();
@@ -27,7 +63,7 @@ function render() {
     ['반환 완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
     ['받는이', suppliers.length, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}<small>${esc(s.requesters.join(' · ')||'의뢰업체 미지정')}</small></td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td><span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small></td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${s.elapsedDays}일<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}<small>${esc(s.requesters.join(' · ')||'의뢰업체 미지정')}</small></td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td><span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${s.elapsedDays}일<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
   $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
@@ -336,6 +372,7 @@ document.addEventListener('click', async e => {
   if (b.dataset.view) { view = b.dataset.view; $('#statusFilter').value = ''; render(); }
   if (b.dataset.edit) openEditor(slips.find(s => s.id === Number(b.dataset.edit)));
   if (b.dataset.print) preview(slips.find(s => s.id === Number(b.dataset.print)));
+  if (b.dataset.track) openTracking(slips.find(s => s.id === Number(b.dataset.track)));
   if (b.dataset.return) openReturn(slips.find(s => s.id === Number(b.dataset.return)));
   if (b.dataset.returnAll) openReturn(slips.find(s => s.id === Number(b.dataset.returnAll)), true);
   if (b.dataset.productEdit) {

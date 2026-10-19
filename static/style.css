@@ -103,3 +103,6 @@
 .editor-receipt-entry{padding:12px;border:1px solid #dce2eb;border-radius:6px;margin:10px 0;background:#fff}.editor-receipt-entry label{margin:8px 0}.editor-receipt-row textarea,.received-serial,.serial-history textarea{height:84px;min-height:84px;max-height:84px;resize:none}.editor-receipt-row textarea{width:100%}.remove-receipt{font-size:11px;color:#aa4d4d}.add-editor-receipt{font-size:12px}.editor-receipt-row>strong{overflow-wrap:anywhere}
 
 [hidden]{display:none!important}
+
+/* Tracking controls stay with outbound shipping details, outside return actions. */
+td .tracking-link{display:inline-block;margin-top:8px;font-size:11px;padding:6px 9px;color:#2863df}#trackingDialog{width:min(480px,94vw)}#trackingDialog label{margin-top:15px}.tracking-link[hidden]{display:none}a.button.primary{background:#2863df;color:white;border-color:#2863df}

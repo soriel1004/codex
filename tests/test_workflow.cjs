@@ -107,6 +107,61 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.match(await page.locator('#rows').innerText(),/0000123456789/);
     assert.match(await page.locator('#rows strong').first().innerText(),/^261019-01$/);
     assert.equal(await page.locator('#rows .month-badge').innerText(),'10월');
+    // Simulated saved slips exercise tracking without contacting any carrier.
+    const trackingFixture=await (await page.request.get(`http://127.0.0.1:${port}/api/slips`)).json();
+    const trackingRoute=`http://127.0.0.1:${port}/api/slips`;
+    async function showTracking(courier, trackingNumber) {
+      await page.unroute(trackingRoute);
+      await page.route(trackingRoute,route=>route.fulfill({json:[{...trackingFixture[0],courier,trackingNumber}]}));
+      await page.reload();
+      await page.locator('#rows [data-edit]').waitFor();
+    }
+    await page.context().route('https://**/*',route=>route.fulfill({contentType:'text/html',body:'<title>배송 조회 테스트</title>'}));
+    const carrierCases=[
+      ['cj 대한통운','https://trace.cjlogistics.com/web/detail.jsp?slipno=0000123456789'],
+      ['한진','https://www.hanjin.com/kor/CMS/DeliveryMgr/WaybillResult.do?mCode=MN038&wblnum=0000123456789'],
+      ['롯데택배','https://www.lotteglogis.com/home/reservation/tracking/linkView?InvNo=0000123456789'],
+      ['우체국','https://service.epost.go.kr/trace.RetrieveDomRigiTraceList.comm?sid1=0000123456789'],
+      ['로젠','https://www.ilogen.com/web/personal/trace/0000123456789']
+    ];
+    for (const [carrier,url] of carrierCases) {
+      await showTracking(carrier,'0000-123 456789');
+      const link=page.locator('#rows a.tracking-link');
+      assert.equal(await link.getAttribute('href'),url);
+      assert.equal(await link.getAttribute('rel'),'noopener noreferrer');
+      const popupReady=page.waitForEvent('popup');
+      await link.click();
+      const popup=await popupReady;
+      await popup.waitForLoadState();
+      assert.equal(popup.url(),url);
+      assert.equal(await popup.evaluate(()=>window.opener),null);
+      await popup.close();
+    }
+    for (const carrier of ['처음 보는 택배사','']) {
+      await showTracking(carrier,'0000-123 456789');
+      await page.locator('#rows [data-track]').click();
+      assert.equal(await page.locator('#trackingNumber').inputValue(),'0000-123 456789');
+      assert.equal(await page.locator('#trackingNumber').getAttribute('readonly'),'');
+      assert.equal(await page.locator('#trackingOpen').isVisible(),false);
+      await page.locator('#trackingCarrier').selectOption('한진택배');
+      assert.equal(await page.locator('#trackingOpen').getAttribute('href'),carrierCases[1][1]);
+      await page.locator('#trackingCarrier').selectOption('');
+      assert.equal(await page.locator('#trackingOpen').getAttribute('href'),null);
+      await page.locator('[data-close=trackingDialog]').last().click();
+    }
+    await showTracking('CJ대한통운','');
+    assert.equal(await page.locator('#rows .tracking-link').isDisabled(),true);
+    assert.match(await page.locator('#rows .tracking-link').innerText(),/송장번호 미등록/);
+    await showTracking('CJ대한통운','0000123&other=456');
+    assert.equal(await page.locator('#rows a.tracking-link').count(),0);
+    await page.locator('#rows [data-track]').click();
+    assert.match(await page.locator('#toast').innerText(),/전표 수정에서 확인/);
+    assert.equal(await page.locator('#trackingDialog').isVisible(),false);
+    await page.unroute(trackingRoute);
+    await page.reload(); await page.locator('#rows [data-edit]').waitFor();
+    const trackingUnchanged=await (await page.request.get(trackingRoute)).json();
+    assert.equal(trackingUnchanged[0].courier,'CJ대한통운');
+    assert.equal(trackingUnchanged[0].trackingNumber,'0000123456789');
     await page.locator('#requesterFilter').selectOption('none');
     assert.equal(await page.locator('#rows [data-edit]').count(),0);
     await page.locator('#requesterFilter').selectOption('GN');
@@ -207,6 +262,7 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.locator('[data-view=completed]').click();
     await page.locator('#rows .badge').filter({hasText:'반환완료'}).waitFor();
     assert.equal(await page.locator('#rows [data-return],#rows [data-return-all]').count(),0);
+    assert.equal(await page.locator('#rows .tracking-link').count(),0);
     assert.deepEqual(await page.locator('#rows .row-actions button').allTextContents(),['수정','전표 출력']);
     await page.locator('#rows [data-edit]').click();
     const summaries = page.locator('#editorReceiptSerialRows .editor-receipt-row');
@@ -262,7 +318,7 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.equal(await page.locator('[name=requesters]:checked').count(),0);
     assert.equal(await page.locator('#editorReceiptSerials').isVisible(),false);
     assert.deepEqual(errors,[]);
-    console.log('PASS: receipt/shipping date and derived month, completed-slip editing of number, sender, products, quantities, serials, production month and receipts, fixed serial boxes, add/remove rows, elapsed days and print.');
+    console.log('PASS: five-carrier tracking links and new tabs, carrier selection, missing/invalid tracking numbers and unchanged records; receipt/shipping date and derived month, completed-slip editing, serials, returns, elapsed days and print.');
   } finally {
     if(browser) await browser.close();
     server.kill();
