@@ -40,7 +40,7 @@ class Workflow(unittest.TestCase):
 
     def setUp(self):
         with self.app.db() as c:
-            for table in ('slips', 'settings', 'suppliers', 'products', 'app_meta'):
+            for table in ('slips', 'settings', 'suppliers', 'products', 'receipt_options', 'app_meta'):
                 c.execute('DELETE FROM ' + table)
         self.post('/api/suppliers', {'name': '공급사 A', 'phone': '02-123-4567'})
         for name in ('메모리 DDR5', '그래픽카드', '메인보드'):
@@ -406,7 +406,9 @@ class Workflow(unittest.TestCase):
             validation = root.find('s:dataValidations/s:dataValidation', ns)
             self.assertEqual(validation.attrib['sqref'], 'U2:U4')
             self.assertEqual(validation.attrib['type'], 'list')
-            options = validation.find('s:formula1', ns).text.strip('"').split(',')
+            self.assertEqual(validation.find('s:formula1', ns).text, 'ReceiptOptions')
+            choices_sheet = ET.fromstring(z.read('xl/worksheets/sheet2.xml'))
+            options = [t.text for t in choices_sheet.findall('.//s:t', ns)]
             self.assertEqual(options, self.get('/api/receipt-options'))
             self.assertIn('교환', options)
 
@@ -420,6 +422,63 @@ class Workflow(unittest.TestCase):
         self.assertEqual(s['items'][0]['receiptTreatment'], '수리')
         self.assertEqual(s['items'][0]['receivedDate'], '2026-10-20')
         self.assertEqual(s['status'], '반환완료')
+
+    def test_custom_receipt_options_crud_preserves_history_and_empty_list(self):
+        name = '유상 교환 완료'
+        self.post('/api/receipt-options', {'name': name})
+        row = next(x for x in self.get('/api/receipt-options/manage') if x['name'] == name)
+        s = self.ret(self.create(), all=True, result=name)
+        self.post('/api/receipt-options', dict(row, name='수리 후 출고'))
+        choices = self.get('/api/receipt-options')
+        self.assertIn('수리 후 출고', choices)
+        self.assertNotIn(name, choices)
+        self.assertEqual(self.get('/api/slips')[0]['result'], name)
+        # Old values stay valid when saving the same historic record after renaming.
+        s = self.post('/api/return-serials', {'id':s['id'], 'version':s['version'], 'eventIndex':0,
+                      'items':[{'index':i,'receivedSerial':''} for i in range(3)]})
+        self.assertEqual(s['result'], name)
+        for option in self.get('/api/receipt-options/manage'):
+            self.post('/api/receipt-options/delete', {'id':option['id']})
+        self.assertEqual(self.get('/api/receipt-options'), [])
+        self.assertEqual(self.get('/api/receipt-options/manage'), [])
+        self.assertEqual(self.get('/api/slips')[0]['result'], name)
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            workbook = ET.fromstring(z.read('xl/workbook.xml'))
+            self.assertIn('$A$1:$A$1', workbook.find('s:definedNames/s:definedName',ns).text)
+
+    def test_receipt_options_validate_names_and_deleted_choices(self):
+        for name in (' ', 'A'*61, '줄바꿈\n항목'):
+            self.assert_error(400, '/api/receipt-options', {'name':name})
+        self.assert_error(400, '/api/receipt-options', {'name':'수리'})
+        self.assert_error(400, '/api/receipt-options/delete', {'id':999999})
+        custom = '사용자 정의 항목'
+        self.post('/api/receipt-options', {'name':custom})
+        row = next(x for x in self.get('/api/receipt-options/manage') if x['name']==custom)
+        self.post('/api/receipt-options/delete', {'id':row['id']})
+        s = self.create()
+        self.assert_error(400, '/api/returns', {'id':s['id'],'version':s['version'],'date':'2026-10-20','all':True,'result':custom})
+
+    def test_excel_custom_option_list_supports_commas_and_over_255_characters(self):
+        names = ['유상, 교환 "완료" & 확인'] + [f'사용자 정의 입고 항목 {i:02d}' for i in range(25)]
+        for name in names:
+            self.post('/api/receipt-options', {'name':name})
+        self.create()
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            for filename in z.namelist():
+                ET.fromstring(z.read(filename))
+            sheet = ET.fromstring(z.read('xl/worksheets/sheet2.xml'))
+            choices = [cell.text for cell in sheet.findall('.//s:t',ns)]
+            self.assertEqual(choices, self.get('/api/receipt-options'))
+            self.assertGreater(len(','.join(choices)),255)
+            for name in names:
+                self.assertIn(name, choices)
+            workbook = ET.fromstring(z.read('xl/workbook.xml'))
+            self.assertEqual(workbook.find('s:sheets',ns)[1].attrib['state'],'hidden')
+            self.assertIn('$A$'+str(len(choices)), workbook.find('s:definedNames/s:definedName',ns).text)
+            main = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            self.assertEqual(main.find('s:dataValidations/s:dataValidation/s:formula1',ns).text,'ReceiptOptions')
 
     def test_unknown_path_and_invalid_record(self):
         self.assert_error(400, '/api/slips', {'supplier': '', 'date': '2026-10-19'})

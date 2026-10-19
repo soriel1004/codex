@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [], editing = null, returning = null, view = 'active';
+let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [], receiptOptionRows = [], editing = null, returning = null, view = 'active';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const total = (s, key) => s.items.reduce((n, i) => n + Number(i[key] || 0), 0);
@@ -156,6 +156,35 @@ $('#productForm').onsubmit = async e => {
     toast('품명을 저장했습니다.');
   } catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };
+function renderReceiptOptionRows() {
+  $('#receiptOptionRows').innerHTML = receiptOptionRows.map(row => `<tr><td>${esc(row.name)}</td><td><button data-receipt-option-edit="${row.id}">수정</button> <button data-receipt-option-delete="${row.id}">삭제</button></td></tr>`).join('') || '<tr><td colspan="2">등록된 항목이 없습니다. 위에서 추가하세요.</td></tr>';
+}
+function refreshReceiptSelections() {
+  const select = $('#returnForm [name=result]'), current = select.value;
+  select.innerHTML = receiptOptionsHtml(receiptOptions.includes(current) || select.disabled ? current : '');
+  $('#returnHistory').querySelectorAll('[data-history-result]').forEach(input => {
+    input.innerHTML = receiptOptionsHtml(input.value);
+  });
+}
+async function reloadReceiptOptions() {
+  receiptOptionRows = await api('/api/receipt-options/manage');
+  receiptOptions = receiptOptionRows.map(row => row.name);
+  renderReceiptOptionRows(); refreshReceiptSelections();
+}
+async function openReceiptOptions() {
+  try { await reloadReceiptOptions(); $('#receiptOptionForm').reset(); $('#receiptOptionsManager').showModal(); }
+  catch (err) { toast(err.message); }
+}
+$('#receiptOptionsBtn').onclick = openReceiptOptions;
+$('#manageReceiptOptions').onclick = openReceiptOptions;
+$('#receiptOptionReset').onclick = () => $('#receiptOptionForm').reset();
+$('#receiptOptionForm').onsubmit = async e => {
+  e.preventDefault(); const button = e.submitter; button.disabled = true;
+  try {
+    await api('/api/receipt-options', Object.fromEntries(new FormData(e.target)));
+    await reloadReceiptOptions(); e.target.reset(); toast('입고처리 항목을 저장했습니다.');
+  } catch (err) { toast(err.message); } finally { button.disabled = false; }
+};
 function receiptOptionsHtml(current = '') {
   return '<option value="">선택 안 함</option>' + receiptOptions.map(value => `<option value="${esc(value)}" ${value === current ? 'selected' : ''}>${esc(value)}</option>`).join('') +
     (current && !receiptOptions.includes(current) ? `<option selected value="${esc(current)}">${esc(current)} (기존 값)</option>` : '');
@@ -194,7 +223,7 @@ function openReturn(s, all = false) {
   if (!done) $('#returnItems textarea:not(:disabled)')?.focus({preventScroll:true});
 }
 function renderReturnHistory(s) {
-  $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><div class="history-heading"><b>${esc(event.date)}</b><label>입고처리<select data-history-result>${receiptOptionsHtml(event.result||'')}</select></label><button type="button" data-save-serials="${eventIndex}">입고정보 저장</button></div>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label>`).join('')}</div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
+  $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><b>${esc(event.date)}</b>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label>`).join('')}<div class="history-heading history-bottom"><label>입고처리<select data-history-result>${receiptOptionsHtml(event.result||'')}</select></label><span>입고일 ${esc(event.date)}</span><button type="button" data-save-serials="${eventIndex}">입고정보 저장</button></div></div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
 }
 $('#selectRemaining').onclick = () => {
   $('#returnItems').querySelectorAll('input[type=checkbox]:not(:disabled)').forEach(c => {
@@ -216,6 +245,17 @@ $('#returnForm').onsubmit = async e => {
 };
 document.addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.receiptOptionEdit) {
+    const row = receiptOptionRows.find(r => r.id === Number(b.dataset.receiptOptionEdit));
+    $('#receiptOptionForm [name=id]').value = row.id; $('#receiptOptionForm [name=name]').value = row.name;
+  }
+  if (b.dataset.receiptOptionDelete) {
+    b.disabled = true;
+    try {
+      await api('/api/receipt-options/delete', {id:Number(b.dataset.receiptOptionDelete)});
+      await reloadReceiptOptions(); $('#receiptOptionForm').reset(); toast('항목을 삭제했습니다. 기존 기록은 유지됩니다.');
+    } catch (err) { toast(err.message); b.disabled = false; }
+  }
   if (b.dataset.saveSerials !== undefined) {
     b.disabled = true;
     const event = b.closest('[data-event]');

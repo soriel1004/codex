@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape
 ROOT = Path(__file__).resolve().parent
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DATA.mkdir(parents=True, exist_ok=True)
-RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
+DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
 def db():
     c = sqlite3.connect(DATA / 'as.db')
@@ -17,6 +17,7 @@ def db():
     c.execute('CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS suppliers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, phone TEXT NOT NULL, address TEXT NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)')
+    c.execute('CREATE TABLE IF NOT EXISTS receipt_options (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)')
     c.execute('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)')
     return c
 
@@ -107,9 +108,22 @@ def valid_date(value):
     return value
 
 
-def receipt_treatment(value, previous=''):
-    if not isinstance(value, str) or (value not in ('', *RECEIPT_OPTIONS) and value != previous):
-        raise ValueError('입고처리는 목록에서 선택하세요.')
+def receipt_option_rows(c=None):
+    if c is None:
+        with db() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            return receipt_option_rows(connection)
+    # Seed once. An intentionally emptied user list must stay empty.
+    if not c.execute("SELECT 1 FROM app_meta WHERE key='receipt_options_seeded'").fetchone():
+        c.executemany('INSERT OR IGNORE INTO receipt_options(name) VALUES(?)', [(name,) for name in DEFAULT_RECEIPT_OPTIONS])
+        c.execute("INSERT INTO app_meta VALUES('receipt_options_seeded','1')")
+    return [dict(id=i, name=name) for i,name in c.execute('SELECT id,name FROM receipt_options ORDER BY id')]
+
+
+def receipt_treatment(value, previous='', c=None):
+    choices = [row['name'] for row in receipt_option_rows(c)]
+    if not isinstance(value, str) or (value not in ('', *choices) and value != previous):
+        raise ValueError('입고처리는 등록된 목록에서 선택하세요. 목록이 바뀌었다면 새로고침하세요.')
     return value
 
 
@@ -119,12 +133,12 @@ def clean_received_serial(value):
     return value.strip()
 
 
-def update_return_serials(r, data):
+def update_return_serials(r, data, c=None):
     event_index = data.get('eventIndex')
     if type(event_index) is not int or not 0 <= event_index < len(r['returns']):
         raise ValueError('반환 이력을 선택하세요.')
     event = r['returns'][event_index]
-    treatment = receipt_treatment(data.get('result', event.get('result', '')), event.get('result', ''))
+    treatment = receipt_treatment(data.get('result', event.get('result', '')), event.get('result', ''), c)
     updates = data.get('items', [])
     indexes = [x.get('index') for x in updates]
     if any(type(i) is not int for i in indexes) or len(set(indexes)) != len(indexes) or set(indexes) != {x['index'] for x in event['items']}:
@@ -137,9 +151,9 @@ def update_return_serials(r, data):
     return normalize(r)
 
 
-def apply_return(r, data):
+def apply_return(r, data, c=None):
     date = valid_date(data.get('date', ''))
-    treatment = receipt_treatment(data.get('result', ''))
+    treatment = receipt_treatment(data.get('result', ''), c=c)
     if date < r['date']:
         raise ValueError('반환일은 접수일 이후여야 합니다.')
     selected = ([{'index': i, 'qty': item['remainingQty']} for i,item in enumerate(r['items']) if item['remainingQty']]
@@ -191,19 +205,24 @@ def xlsx(rows):
             value = ''.join(ch for ch in str(v) if ch in '\t\n\r' or ord(ch)>=32)
             cells.append(f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{escape(value)}</t></is></c>')
         xmlrows.append(f'<row r="{n}">{"".join(cells)}</row>')
+    options = [row['name'] for row in receipt_option_rows()]
+    option_cells = ''.join(f'<row r="{i}"><c r="A{i}" t="inlineStr"><is><t>{escape(name)}</t></is></c></row>'
+                           for i,name in enumerate(options or [''], 1))
+    option_sheet = ('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                    '<sheetData>' + option_cells + '</sheetData></worksheet>')
     treatment_column = col(len(headers) - 1)
     validation = ''
     if len(table) > 1:
-        choices = escape('"' + ','.join(RECEIPT_OPTIONS) + '"')
         validation = (f'<dataValidations count="1"><dataValidation type="list" allowBlank="1" showErrorMessage="1" '
                       f'errorStyle="stop" sqref="{treatment_column}2:{treatment_column}{len(table)}">'
-                      f'<formula1>{choices}</formula1></dataValidation></dataValidations>')
+                      '<formula1>ReceiptOptions</formula1></dataValidation></dataValidations>')
     out = io.BytesIO()
     with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:
-        z.writestr('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+        z.writestr('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
         z.writestr('_rels/.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
-        z.writestr('xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="AS 누적내역" sheetId="1" r:id="rId1"/></sheets></workbook>')
-        z.writestr('xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
+        z.writestr('xl/workbook.xml','<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="AS 누적내역" sheetId="1" r:id="rId1"/><sheet name="입고처리목록" sheetId="2" state="hidden" r:id="rId2"/></sheets><definedNames><definedName name="ReceiptOptions">입고처리목록!$A$1:$A$'+str(max(1,len(options)))+'</definedName></definedNames></workbook>')
+        z.writestr('xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>')
+        z.writestr('xl/worksheets/sheet2.xml', option_sheet)
         z.writestr('xl/worksheets/sheet1.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="'+str(len(headers))+'" width="22" customWidth="1"/></cols><sheetData>'+''.join(xmlrows)+'</sheetData><autoFilter ref="A1:'+col(len(headers))+str(len(table))+'"/>'+validation+'</worksheet>')
     return out.getvalue()
 
@@ -217,7 +236,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path=urlparse(self.path).path
         if path=='/api/slips': return self.send(records())
-        if path=='/api/receipt-options': return self.send(list(RECEIPT_OPTIONS))
+        if path=='/api/receipt-options': return self.send([row['name'] for row in receipt_option_rows()])
+        if path=='/api/receipt-options/manage': return self.send(receipt_option_rows())
         if path=='/api/suppliers': return self.send(suppliers())
         if path=='/api/products': return self.send(products())
         if path=='/api/settings':
@@ -234,6 +254,29 @@ class Handler(BaseHTTPRequestHandler):
             if length>200000: raise ValueError('입력 내용이 너무 큽니다.')
             data=json.loads(self.rfile.read(length))
             path=urlparse(self.path).path
+            if path in ('/api/receipt-options', '/api/receipt-options/delete'):
+                with db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    receipt_option_rows(c)
+                    id = data.get('id')
+                    if id and not c.execute('SELECT 1 FROM receipt_options WHERE id=?', (id,)).fetchone():
+                        raise ValueError('입고처리 항목이 없습니다.')
+                    if path.endswith('/delete'):
+                        if not id:
+                            raise ValueError('삭제할 항목을 선택하세요.')
+                        c.execute('DELETE FROM receipt_options WHERE id=?', (id,))
+                    else:
+                        name = str(data.get('name', '')).strip()
+                        if not name or len(name) > 60 or any(ord(ch) < 32 for ch in name):
+                            raise ValueError('입고처리 항목을 줄바꿈 없이 1~60자로 입력하세요.')
+                        try:
+                            if id:
+                                c.execute('UPDATE receipt_options SET name=? WHERE id=?', (name, id))
+                            else:
+                                c.execute('INSERT INTO receipt_options(name) VALUES(?)', (name,))
+                        except sqlite3.IntegrityError:
+                            raise ValueError('이미 등록된 입고처리 항목입니다.')
+                return self.send({'ok': True})
             if path=='/api/settings':
                 data = {k: str(v)[:60] for k,v in data.items() if k in ('company', 'companyPhone', 'manager')}
                 with db() as c: c.execute('INSERT OR REPLACE INTO settings VALUES(1,?)',(json.dumps(data,ensure_ascii=False),))
@@ -287,11 +330,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path == '/api/return-serials':
                     if not old:
                         raise ValueError('반환 이력이 있는 전표를 선택하세요.')
-                    result = update_return_serials(old, data)
+                    result = update_return_serials(old, data, c)
                 elif path == '/api/returns':
                     if not old:
                         raise ValueError('반환할 전표를 선택하세요.')
-                    result = apply_return(old, data)
+                    result = apply_return(old, data, c)
                 else:
                     if not data.get('supplier','').strip() or not data.get('date'):
                         raise ValueError('받는이와 접수일을 입력하세요.')
