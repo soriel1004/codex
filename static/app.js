@@ -26,7 +26,7 @@ function render() {
     ['반환 완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
     ['받는이', suppliers.length, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}<small>${esc(s.requesters.join(' · ')||'의뢰업체 미지정')}</small></td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td>${esc(s.shippedDate||'—')} <span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small></td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:`<button data-return="${s.id}">반환 이력</button> `}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}<small>${esc(s.requesters.join(' · ')||'의뢰업체 미지정')}</small></td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td>${esc(s.shippedDate||'—')} <span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small></td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
   $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
@@ -79,6 +79,8 @@ function openEditor(s = null) {
     s.items.forEach(itemRow);
   } else { f.elements.date.value = today(); itemRow(); }
   showShippedMonth();
+  $('#editorReceiptSerials').hidden = !s;
+  $('#editorReceiptSerialRows').innerHTML = s ? s.items.map(item => `<article class="editor-receipt-row"><strong>${esc(item.name)}</strong><div class="form-grid"><label>출고 시리얼번호<input aria-label="${esc(item.name)} 출고 시리얼 확인" value="${esc(item.serial||'')}" readonly></label><label>변경된 입고 시리얼번호<textarea aria-label="${esc(item.name)} 변경된 입고 시리얼 확인" rows="2" readonly>${esc(item.receivedSerial||'')}</textarea></label></div></article>`).join('') : '';
   $('#itemLock').hidden = !locked;
   $('#addItem').disabled = locked;
   $('#items').querySelectorAll('input').forEach(i => i.readOnly = locked);
