@@ -79,12 +79,13 @@ const {spawn, execFileSync} = require('node:child_process');
       assert.equal(text.split('인계자').length-1,2,`${name}: both sender signatures must survive`);
       assert.equal(text.split('인수자').length-1,2,`${name}: both recipient signatures must survive`);
       assert.equal(text.split('LAST-FAULT-END').length-1,2,`${name}: last item's symptom must survive`);
-      for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','COURIER-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고월','송장번호','공급자','공급받는자','생산년월','입고시리얼번호','입고처리','입고일','2025-09','000NEW-PRINT','NEW-SERIAL-','RECEIPT-RESULT-PRIVATE','2026-10-25','REPAIR-REPORT-PRIVATE','M/B수리내역서']) {
+      for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','COURIER-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고월','송장번호','공급자','공급받는자','생산년월','입고시리얼번호','입고처리','입고일','2025-09','000NEW-PRINT','NEW-SERIAL-','RECEIPT-RESULT-PRIVATE','2026-10-25','REPAIR-REPORT-PRIVATE','M/B수리내역서','부분반환','반환완료']) {
         assert.ok(!text.includes(hidden),`${name}: must not print ${hidden}`);
       }
       assert.ok(text.includes('받는이보관용') && text.includes('보낸이보관용'),`${name}: updated party labels`);
       assert.ok(text.includes('010-1234-5678') && text.includes('02-123-4567'),`${name}: phone numbers retained`);
       assert.equal(text.split('접수일(출고일)2026-10-19').length-1,2,`${name}: date label and value on both copies`);
+      assert.equal(text.split('AS발송·완료').length-1,2,`${name}: completed status uses new label`);
       assert.ok(text.includes('GN')&&text.includes('대일'),`${name}: requesting companies retained`);
       const bbox=execFileSync('pdftotext',['-bbox',file,'-'],{encoding:'utf8'});
       for (const word of bbox.matchAll(/<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)"/g)) {

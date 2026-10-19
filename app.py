@@ -21,6 +21,10 @@ def db():
     c.execute('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)')
     return c
 
+def status_label(value):
+    return {'부분반환':'부분완료', '반환완료':'완료'}.get(value, value)
+
+
 def korea_today():
     return datetime.now(timezone(timedelta(hours=9))).date()
 
@@ -259,7 +263,7 @@ def editor_returns(old, data, items, c):
         raise ValueError('입고수량이 출고수량을 초과합니다. 수량 또는 입고내역을 함께 수정하세요.')
     expected = '반환완료' if all(total == int(item['qty']) for total,item in zip(totals, items)) else '부분반환' if any(totals) else None
     if expected and data['status'] != expected:
-        raise ValueError(f'입고수량에 맞춰 진행상태를 {expected}(으)로 선택하세요.')
+        raise ValueError(f'입고수량에 맞춰 진행상태를 {status_label(expected)}(으)로 선택하세요.')
     if not expected and data['status'] in ('부분반환','반환완료'):
         raise ValueError('선택한 진행상태에 맞는 입고내역을 입력하세요.')
     return result
@@ -278,7 +282,7 @@ def xlsx(rows):
                 r.get('courier', ''), r.get('trackingNumber', ''), ' · '.join(r.get('requesters', [])),
                 r['supplier'], r.get('company', ''), item.get('name', ''), item.get('productionMonth', ''),
                 item.get('serial', ''), item.get('receivedSerial', ''), r.get('note', ''), item.get('mbRepairReport', ''), item.get('qty', 1),
-                item.get('fault', ''), r['kind'], r['status'], item['returnedQty'],
+                item.get('fault', ''), r['kind'], status_label(r['status']), item['returnedQty'],
                 item['remainingQty'], item['elapsedDays'], item.get('receiptTreatment', ''), item.get('receivedDate', '')])
     def col(i):
         s = ''

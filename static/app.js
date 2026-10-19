@@ -4,6 +4,7 @@ let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const total = (s, key) => s.items.reduce((n, i) => n + Number(i[key] || 0), 0);
+const statusLabel = value => ({'부분반환':'부분완료','반환완료':'완료'})[value] || value;
 const headerDateFormat = new Intl.DateTimeFormat('ko-KR', {timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit',weekday:'long'});
 const headerTimeFormat = new Intl.DateTimeFormat('ko-KR', {timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
 function updateHeaderClock() {
@@ -81,16 +82,16 @@ function elapsedIndicator(s) {
 function render() {
   const q = $('#search').value.trim().toLowerCase(), status = $('#statusFilter').value;
   const requester = $('#requesterFilter').value;
-  const filtered = slips.filter(s => (!requester || (requester === 'none' ? !s.requesters.length : s.requesters.includes(requester))) && (view === 'all' || (s.status === '반환완료') === (view === 'completed')) && (!status || s.status === status) && JSON.stringify(s).toLowerCase().includes(q));
+  const filtered = slips.filter(s => (!requester || (requester === 'none' ? !s.requesters.length : s.requesters.includes(requester))) && (view === 'all' || (s.status === '반환완료') === (view === 'completed')) && (!status || s.status === status) && (JSON.stringify(s).toLowerCase().includes(q) || statusLabel(s.status).includes(q)));
   $('#count').textContent = filtered.length + '건';
   document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   $('#stats').innerHTML = [
     ['전체 전표', slips.length, '누적 접수 내역'],
-    ['진행 중', slips.filter(s => s.status !== '반환완료').length, '부분반환 포함 · 미반환 품목 관리'],
-    ['반환 완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
+    ['진행 중', slips.filter(s => s.status !== '반환완료').length, '부분완료 포함 · 미반환 품목 관리'],
+    ['완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
     ['받는이', suppliers.length, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions"><div class="row-action-buttons">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">부분완료</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">완료</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></div></td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions"><div class="row-action-buttons">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">부분완료</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">완료</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></div></td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
   $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
@@ -190,7 +191,7 @@ function openEditor(s = null) {
   $('#editorTitle').textContent = s ? '전표 수정 · ' + s.number : '전표 작성';
   $('#editorNumberField').hidden = !s;
   f.elements.number.disabled = !s;
-  f.elements.status.innerHTML = ['접수','발송','처리중', ...(s?['부분반환','반환완료']:[])].map(v=>`<option>${v}</option>`).join('');
+  f.elements.status.innerHTML = ['접수','발송','처리중', ...(s?['부분반환','반환완료']:[])].map(v=>`<option value="${v}">${statusLabel(v)}</option>`).join('');
   f.elements.status.disabled = false;
   const source = s || settings;
   for (const [k,v] of Object.entries(source)) if (k !== 'requesters' && f.elements.namedItem(k)) f.elements.namedItem(k).value=v;
@@ -457,7 +458,7 @@ function preparePrint() {
 function preview(s) {
   const party = (title, company, phone, manager = '') => `<div class="party"><b>${title}</b><div><strong>${esc(company||'—')}</strong><p>전화번호 ${esc(phone||'—')}</p>${manager ? `<p>담당자 ${esc(manager)}</p>` : ''}</div></div>`;
   const copy = label => `<section class="slip"><div class="slip-content">
-    <div class="slip-title"><div><h1>AS 입출고 전표</h1><p>${esc(s.kind)} · ${esc(s.status)}</p></div><span>${label} 보관용</span></div>
+    <div class="slip-title"><div><h1>AS 입출고 전표</h1><p>${esc(s.kind)} · ${esc(statusLabel(s.status))}</p></div><span>${label} 보관용</span></div>
     <div class="slip-meta"><strong>${esc(s.number)}</strong><span>${s.requesters?.length ? `의뢰업체 ${esc(s.requesters.join(' · '))} · ` : ''}접수일 (출고일) ${esc(s.date)}</span></div>
     <div class="parties">${party('받는이',s.supplier,s.phone)}${party('보낸이',s.company,s.companyPhone,s.manager)}</div>
     <table class="print-table"><thead><tr><th>품명</th><th>출고 시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.serial||'')}</td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>

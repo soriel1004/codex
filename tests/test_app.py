@@ -194,6 +194,7 @@ class Workflow(unittest.TestCase):
             first, second = (dict(zip(rows[0], row)) for row in rows[1:3])
             self.assertEqual(first['출고 시리얼번호'], '001234')
             self.assertIsNone(first['입고 시리얼번호'])
+            self.assertEqual(first['진행상태'], '부분완료')
             self.assertEqual(first['반환수량'], '1')
             self.assertEqual(first['미반환수량'], '1')
             self.assertEqual(first['입고처리'], '교환')
@@ -455,6 +456,7 @@ class Workflow(unittest.TestCase):
             index = rows[0].index('입고 시리얼번호')
             self.assertEqual(rows[0][index:index+3], ['입고 시리얼번호','비고','M/B 수리내역서 작성'])
             first, second, third = [dict(zip(rows[0],row)) for row in rows[1:]]
+            self.assertEqual(first['진행상태'], '완료')
             self.assertEqual(first['비고'], s['note'])
             self.assertEqual(first['M/B 수리내역서 작성'], corrected+'\n추가 수리')
             self.assertIsNone(second['M/B 수리내역서 작성'])
