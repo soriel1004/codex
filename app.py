@@ -232,9 +232,6 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError('품명과 1~99999의 정수 수량을 입력하세요.')
                         if len(item['name']) > 120:
                             raise ValueError('품명은 120자 이내로 입력하세요.')
-                        existing_name = old and any(i['name'] == item['name'] for i in old['items'])
-                        if not existing_name and not c.execute('SELECT 1 FROM products WHERE name=?', (item['name'],)).fetchone():
-                            raise ValueError('품명 관리에서 등록된 품명을 선택하세요.')
                     if old and old['returns']:
                         fields = ('name','serial','qty','fault')
                         if len(items) != len(old['items']) or any(str(a.get(k,'')) != str(b.get(k,'')) for a,b in zip(items,old['items']) for k in fields):

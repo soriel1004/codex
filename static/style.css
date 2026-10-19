@@ -85,3 +85,5 @@
 .preview-actions{flex-wrap:wrap}.print-guide{font-size:11px;color:#69788f}
 
 .header-actions{flex-wrap:wrap;justify-content:flex-end}.item-table select{width:100%;min-width:180px;max-width:320px;font-size:12px}.item-table td:first-child{width:35%}.date-month{display:flex;align-items:center;gap:12px}.date-month input{flex:1;min-width:0}.date-month output,.month-badge{white-space:nowrap;background:#edf3ff;color:#2863df;border-radius:5px;padding:7px 10px;font-weight:bold}.month-badge{font-size:10px;padding:3px 5px}.month-badge:empty{display:none}#products{width:650px}.items-heading #manageProducts{margin-left:auto}.items-heading #addItem{margin-left:0}
+
+.management-search{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:20px 0 12px}.management-search input{flex:1;min-width:160px}.management-search span{font-size:11px;color:#7a8799}.item-table [data-key=name]{min-width:220px}.item-table th small{font-size:10px;color:#8b98a8}

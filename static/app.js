@@ -44,16 +44,14 @@ $('#slipForm [name=supplier]').onchange = e => {
     $('#slipForm [name=phone]').value = supplier.phone;
   }
 };
-function productOptions(selected = '') {
-  return '<option value="">품명을 선택하세요</option>' + products.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('') +
-    (selected && !products.some(p => p.name === selected) ? `<option value="${esc(selected)}">${esc(selected)} (기존 전표)</option>` : '');
+function refreshProductSuggestions() {
+  $('#productNames').innerHTML = products.map(p => `<option value="${esc(p.name)}"></option>`).join('');
 }
 function itemRow(i = {}) {
   const tr = document.createElement('tr');
-  tr.innerHTML = `<td><select data-key="name" aria-label="품명" required>${productOptions(i.name)}</select></td>` +
+  tr.innerHTML = `<td><input data-key="name" aria-label="품명" list="productNames" maxlength="120" placeholder="목록에서 선택 또는 직접 입력" value="${esc(i.name||'')}" required></td>` +
     ['serial','qty','fault'].map(k => `<td><input data-key="${k}" aria-label="${({serial:'시리얼번호',qty:'수량',fault:'불량 증상'})[k]}" ${k==='qty'?'type="number" min="1" max="99999" required':'maxlength="'+(k==='fault'?70:40)+'"'} value="${esc(i[k]??(k==='qty'?1:''))}"></td>`).join('') +
     '<td><button type="button" class="remove" aria-label="품목 삭제">×</button></td>';
-  tr.querySelector('select').value = i.name || '';
   tr.querySelector('.remove').onclick = () => {
     if ($('#items').children.length > 1) tr.remove(); else toast('품목은 최소 1개가 필요합니다.');
   };
@@ -69,7 +67,8 @@ function openEditor(s = null) {
   editing = s;
   const f = $('#slipForm'); f.reset(); $('#items').innerHTML = '';
   supplierOptions(s?.supplier);
-  $('#editorTitle').textContent = s ? '전표 수정 · ' + s.number : '새 전표 작성';
+  refreshProductSuggestions();
+  $('#editorTitle').textContent = s ? '전표 수정 · ' + s.number : '전표 작성';
   const locked = Boolean(s?.returns.length);
   f.elements.status.innerHTML = ['접수','발송','처리중', ...(locked?[s.status]:[])].map(v => `<option>${v}</option>`).join('');
   f.elements.status.disabled = locked;
@@ -81,7 +80,6 @@ function openEditor(s = null) {
   $('#itemLock').hidden = !locked;
   $('#addItem').disabled = locked;
   $('#items').querySelectorAll('input').forEach(i => i.readOnly = locked);
-  $('#items').querySelectorAll('select').forEach(i => i.disabled = locked);
   $('#items').querySelectorAll('button').forEach(b => b.disabled = locked);
   $('#editor').showModal();
 }
@@ -108,10 +106,21 @@ $('#settingsForm').onsubmit = async e => {
     await api('/api/settings', next); settings = next; $('#settings').close(); toast('업체 정보를 저장했습니다.');
   } catch (err) { toast(err.message); }
 };
-function renderSuppliers() {
-  $('#supplierRows').innerHTML = suppliers.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td><button data-supplier-edit="${s.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="3">등록된 받는이가 없습니다. 위에서 등록하세요.</td></tr>';
+function matchesManagementSearch(value, query) {
+  const text = value.toLocaleLowerCase(), q = query.trim().toLocaleLowerCase();
+  const compact = q.replace(/[\s()-]/g, '');
+  return text.includes(q) || (compact.length > 0 && text.replace(/[\s()-]/g, '').includes(compact));
 }
-$('#suppliersBtn').onclick = () => { $('#supplierForm').reset(); renderSuppliers(); $('#suppliers').showModal(); };
+function renderSuppliers() {
+  const filtered = suppliers.filter(s => matchesManagementSearch(`${s.name} ${s.phone}`, $('#supplierSearch').value));
+  $('#supplierSearchCount').textContent = `${filtered.length} / ${suppliers.length}개`;
+  $('#supplierRows').innerHTML = filtered.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td><button data-supplier-edit="${s.id}">수정</button></td></tr>`).join('') ||
+    `<tr><td colspan="3">${suppliers.length ? '검색 결과가 없습니다.' : '등록된 받는이가 없습니다. 위에서 등록하세요.'}</td></tr>`;
+}
+$('#supplierSearch').oninput = renderSuppliers;
+$('#suppliersBtn').onclick = () => {
+  $('#supplierForm').reset(); $('#supplierSearch').value = ''; renderSuppliers(); $('#suppliers').showModal();
+};
 $('#supplierReset').onclick = () => { $('#supplierForm').reset(); $('#supplierForm [name=id]').value = ''; };
 $('#supplierForm').onsubmit = async e => {
   e.preventDefault(); const btn = e.submitter; btn.disabled = true;
@@ -122,9 +131,15 @@ $('#supplierForm').onsubmit = async e => {
   } catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };
 function renderProducts() {
-  $('#productRows').innerHTML = products.map(p => `<tr><td>${esc(p.name)}</td><td><button data-product-edit="${p.id}">수정</button></td></tr>`).join('') || '<tr><td colspan="2">등록된 품명이 없습니다. 위에서 추가하세요.</td></tr>';
+  const filtered = products.filter(p => matchesManagementSearch(p.name, $('#productSearch').value));
+  $('#productSearchCount').textContent = `${filtered.length} / ${products.length}개`;
+  $('#productRows').innerHTML = filtered.map(p => `<tr><td>${esc(p.name)}</td><td><button data-product-edit="${p.id}">수정</button></td></tr>`).join('') ||
+    `<tr><td colspan="2">${products.length ? '검색 결과가 없습니다.' : '등록된 품명이 없습니다. 위에서 추가하세요.'}</td></tr>`;
 }
-function openProducts() { $('#productForm').reset(); renderProducts(); $('#products').showModal(); }
+$('#productSearch').oninput = renderProducts;
+function openProducts() {
+  $('#productForm').reset(); $('#productSearch').value = ''; renderProducts(); $('#products').showModal();
+}
 $('#productsBtn').onclick = openProducts;
 $('#manageProducts').onclick = openProducts;
 $('#productReset').onclick = () => { $('#productForm').reset(); $('#productForm [name=id]').value = ''; };
@@ -134,10 +149,7 @@ $('#productForm').onsubmit = async e => {
     await api('/api/products', Object.fromEntries(new FormData(e.target)));
     products = await api('/api/products'); e.target.reset(); e.target.elements.id.value = '';
     renderProducts();
-    $('#items').querySelectorAll('select').forEach(select => {
-      const selected = select.value;
-      select.innerHTML = productOptions(selected); select.value = selected;
-    });
+    refreshProductSuggestions();
     toast('품명을 저장했습니다.');
   } catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };

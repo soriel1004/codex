@@ -261,6 +261,29 @@ class Workflow(unittest.TestCase):
         for key in ('address', 'business', 'supplierAddress'):
             self.assertNotIn(key, saved)
 
+    def test_manual_product_name_survives_edit_return_and_excel(self):
+        self.get('/api/products')
+        s = self.create()
+        manual = '수기 제품 <GPU> "미등록"'
+        s['items'][1]['name'] = manual
+        s = self.post('/api/slips', s)
+        self.assertEqual(self.get('/api/slips')[0]['items'][1]['name'], manual)
+        self.assertNotIn(manual, [p['name'] for p in self.get('/api/products')])
+        s = self.ret(s, items=[{'index': 1, 'qty': 1}])
+        self.assertEqual(s['items'][1]['name'], manual)
+        self.assertEqual(s['items'][1]['returnedQty'], 1)
+        s['note'] = '수기 품명 반환 이력 보존'
+        self.assertEqual(self.post('/api/slips', s)['items'][1]['name'], manual)
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            self.assertIn(manual, [t.text for t in root.iter()])
+
+    def test_manual_product_validation_still_rejects_empty_and_long_names(self):
+        for name in ('', '   ', 'A' * 121):
+            s = self.create()
+            s['items'][0]['name'] = name
+            self.assert_error(400, '/api/slips', s)
+
     def test_unknown_path_and_invalid_record(self):
         self.assert_error(400, '/api/slips', {'supplier': '', 'date': '2026-10-19'})
         with self.assertRaises(urllib.error.HTTPError) as err:
