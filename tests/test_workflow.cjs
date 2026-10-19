@@ -208,6 +208,7 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.locator('#returnItems tr').first().locator('[type=number]').fill('1');
     await page.locator('#returnSave').click();
     await page.locator('#rows .badge').filter({hasText:'부분반환'}).waitFor();
+    assert.equal(await page.locator('#rows .serial-changes').count(),0);
     const partialData = await (await page.request.get(`http://127.0.0.1:${port}/api/slips`)).json();
     assert.equal(partialData[0].returns[0].result, customTreatment);
     await page.locator('#rows [data-edit]').click();
@@ -267,6 +268,13 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.setViewportSize({width:1600,height:1100});
     await page.locator('[data-view=completed]').click();
     await page.locator('#rows .badge').filter({hasText:'반환완료'}).waitFor();
+    const serialChanges=page.locator('#rows .serial-changes');
+    assert.equal(await serialChanges.locator('summary').innerText(),'시리얼 변경 · 1품목');
+    await serialChanges.locator('summary').click();
+    assert.equal(await serialChanges.locator('.serial-change-item').count(),1);
+    assert.match(await serialChanges.innerText(),/출고: 001234/);
+    assert.match(await serialChanges.innerText(),/입고: 000CORRECTED\n000FULL-A/);
+    assert.ok((await serialChanges.innerText()).includes(productName));
     assert.equal(await page.locator('#rows [data-return],#rows [data-return-all]').count(),0);
     assert.equal(await page.locator('#rows .tracking-link').count(),0);
     assert.deepEqual(await page.locator('#rows .row-actions button').allTextContents(),['수정','전표 출력']);
@@ -316,15 +324,42 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.equal(fullyEdited[0].items[0].serial,'OUT-EDIT');
     assert.equal(fullyEdited[0].items[0].receivedSerial,'EDITED-NEW\n000FULL-A');
     assert.equal(fullyEdited[0].elapsedDays,3);
+    await page.locator('#rows .serial-changes').filter({hasText:'EDITED-NEW'}).waitFor();
     await page.locator('#rows [data-print]').click();
     assert.ok(!(await page.locator('#paper').innerText()).includes('EDITED-NEW'));
     assert.match(await page.locator('#paper').innerText(),/OUT-EDIT/);
     await page.locator('[data-close=preview]').click();
+    // Completed-list comparison handles unchanged batches, missing numbers,
+    // changes on later items, and HTML-like serial text without changing records.
+    const serialCases=[
+      {items:[{serial:'OLD-1, OLD-2',receivedSerial:' OLD-2\nOLD-1\nOLD-1 '},{serial:'000123',receivedSerial:''}],count:0},
+      {items:[{serial:'',receivedSerial:'NEW-ONLY'},{serial:'SAME',receivedSerial:' SAME '}],count:0},
+      {items:[{serial:'OLD-1, OLD-2',receivedSerial:'OLD-2\nOLD-1'},{name:'교환 <img src=x onerror=alert(1)>',serial:'000123',receivedSerial:'000124<NEW>'}],count:1},
+      {items:[{serial:'OLD-1',receivedSerial:'NEW-1'},{serial:'OLD-2',receivedSerial:'NEW-2'}],count:2}
+    ];
+    for (const scenario of serialCases) {
+      const fixture={...fullyEdited[0],items:fullyEdited[0].items.map((item,index)=>({...item,...scenario.items[index]}))};
+      await page.route(trackingRoute,route=>route.fulfill({json:[fixture]}));
+      await page.reload();
+      await page.locator('[data-view=completed]').click();
+      await page.locator('#rows [data-edit]').waitFor();
+      assert.equal(await page.locator('#rows .serial-change-item').count(),scenario.count);
+      if (scenario.count) {
+        assert.equal(await page.locator('#rows .serial-changes summary').innerText(),`시리얼 변경 · ${scenario.count}품목`);
+        await page.locator('#rows .serial-changes summary').click();
+        assert.ok((await page.locator('#rows .serial-changes').innerText()).includes(scenario.items[1].receivedSerial));
+        assert.equal(await page.locator('#rows .serial-changes img').count(),0);
+        await page.locator('[data-view=all]').click();
+        assert.equal(await page.locator('#rows .serial-change-item').count(),scenario.count);
+      }
+      await page.unroute(trackingRoute);
+    }
+    await page.reload();
     await page.locator('#newBtn').click();
     assert.equal(await page.locator('[name=requesters]:checked').count(),0);
     assert.equal(await page.locator('#editorReceiptSerials').isVisible(),false);
     assert.deepEqual(errors,[]);
-    console.log('PASS: five-carrier tracking links and new tabs, carrier selection, missing/invalid tracking numbers and unchanged records; receipt/shipping date and derived month, completed-slip editing, serials, returns, elapsed days and print.');
+    console.log('PASS: completed serial change indicators, unchanged/missing/reordered serials, multiple products and escaped text; five-carrier tracking, completed-slip editing, returns, elapsed days and print.');
   } finally {
     if(browser) await browser.close();
     server.kill();

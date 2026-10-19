@@ -107,3 +107,5 @@
 td .tracking-link{display:inline-block;margin-top:8px;font-size:11px;padding:6px 9px;color:#2863df}#trackingDialog{width:min(480px,94vw)}#trackingDialog label{margin-top:15px}.tracking-link[hidden]{display:none}a.button.primary{background:#2863df;color:white;border-color:#2863df}
 
 .row-action-buttons{display:grid;grid-template-columns:repeat(2,max-content);gap:6px;justify-content:start}.row-action-buttons button{margin:0}
+
+.serial-changes{margin-top:9px;font-size:11px}.serial-changes summary{cursor:pointer;color:#875411;white-space:nowrap}.serial-change-badge{display:inline-block;border:1px solid #edd2a3;border-radius:5px;padding:4px 6px;background:#fff4df;color:#875411;font-weight:bold}.serial-change-list{margin-top:8px;min-width:170px;max-width:270px}.serial-change-item{padding:8px;background:#fffaf0;border:1px solid #f1e1c6;border-radius:5px;margin-top:6px;overflow-wrap:anywhere;white-space:normal}.serial-change-item b{display:block;margin-bottom:5px}.serial-change-item span{display:block;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}
