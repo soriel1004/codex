@@ -99,3 +99,7 @@
 .bottom-settings{display:flex;justify-content:flex-end;margin-top:15px}.receipt-fields{border-top:1px solid #dce2eb;margin-top:22px;padding-top:8px}#receiptOptionsManager{width:650px}.history-bottom{margin:14px 0 0;padding-top:12px;border-top:1px solid #e4e9f1}.history-bottom span{flex:none}
 
 #editorReceiptSerials{margin-top:22px;padding-top:10px;border-top:1px solid #e4e9f1}.editor-receipt-row{background:#f6f9ff;border:1px solid #dce7fc;border-radius:7px;padding:14px;margin:10px 0}.editor-receipt-row>strong{display:block;font-size:13px;margin-bottom:12px}.editor-receipt-row input,.editor-receipt-row textarea{background:white;color:#253344}.editor-receipt-row textarea{white-space:pre-wrap;overflow-wrap:anywhere;resize:vertical}
+
+.editor-receipt-entry{padding:12px;border:1px solid #dce2eb;border-radius:6px;margin:10px 0;background:#fff}.editor-receipt-entry label{margin:8px 0}.editor-receipt-row textarea,.received-serial,.serial-history textarea{height:84px;min-height:84px;max-height:84px;resize:none}.editor-receipt-row textarea{width:100%}.remove-receipt{font-size:11px;color:#aa4d4d}.add-editor-receipt{font-size:12px}.editor-receipt-row>strong{overflow-wrap:anywhere}
+
+[hidden]{display:none!important}

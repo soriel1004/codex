@@ -1,4 +1,5 @@
 const $ = s => document.querySelector(s);
+let editorRowSequence = 0;
 let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [], receiptOptionRows = [], editing = null, returning = null, view = 'active';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
@@ -26,7 +27,7 @@ function render() {
     ['반환 완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
     ['받는이', suppliers.length, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}<small>${esc(s.requesters.join(' · ')||'의뢰업체 미지정')}</small></td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td>${esc(s.shippedDate||'—')} <span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small></td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}<small>${esc(s.requesters.join(' · ')||'의뢰업체 미지정')}</small></td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td><span class="month-badge">${esc(s.shippedMonth||'')}</span></td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small></td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(s.status)}</span></td><td>${s.elapsedDays}일<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">반환</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">전량 반환</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
   $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
@@ -50,41 +51,94 @@ function refreshProductSuggestions() {
 }
 function itemRow(i = {}) {
   const tr = document.createElement('tr');
+  tr.dataset.rowKey = 'editor-item-' + (++editorRowSequence);
+  tr.dataset.sourceIndex = Number.isInteger(i.sourceIndex) ? i.sourceIndex : '';
   tr.innerHTML = `<td><input data-key="name" aria-label="품명" list="productNames" maxlength="120" placeholder="목록에서 선택 또는 직접 입력" value="${esc(i.name||'')}" required></td>` +
     ['productionMonth','serial','qty','fault'].map(k => `<td><input data-key="${k}" aria-label="${({productionMonth:'생산 년월',serial:'출고 시리얼번호',qty:'수량',fault:'불량 증상'})[k]}" ${k==='productionMonth'?'type="month"':k==='qty'?'type="number" min="1" max="99999" required':'maxlength="'+(k==='fault'?70:40)+'"'} value="${esc(i[k]??(k==='qty'?1:''))}"></td>`).join('') +
     '<td><button type="button" class="remove" aria-label="품목 삭제">×</button></td>';
   tr.querySelector('.remove').onclick = () => {
-    if ($('#items').children.length > 1) tr.remove(); else toast('품목은 최소 1개가 필요합니다.');
+    if ($('#items').children.length > 1) {
+      $('#editorReceiptSerialRows').querySelector(`[data-row-key="${tr.dataset.rowKey}"]`)?.remove();
+      tr.remove(); syncEditorStatus();
+    } else toast('품목은 최소 1개가 필요합니다.');
   };
   $('#items').append(tr);
+  if (editing) addEditorReceiptCard(tr, i);
+  tr.querySelector('[data-key=name]').oninput = () => {
+    const card = $('#editorReceiptSerialRows').querySelector(`[data-row-key="${tr.dataset.rowKey}"]`);
+    if (card) card.querySelector('strong').textContent = tr.querySelector('[data-key=name]').value;
+  };
+  tr.querySelector('[data-key=qty]').oninput = syncEditorStatus;
 }
 function showShippedMonth() {
-  const date = $('#shippedDate').value;
+  const date = $('#receiptDate').value;
   $('#shippedMonth').textContent = date ? Number(date.slice(5,7)) + '월' : '—월';
 }
-$('#shippedDate').oninput = showShippedMonth;
-$('#shippedDate').onchange = showShippedMonth;
+$('#receiptDate').oninput = () => {showShippedMonth(); updateEditorElapsed();};
+$('#receiptDate').onchange = $('#receiptDate').oninput;
+function addEditorReceiptEntry(card, entry = {}, eventIndex = null) {
+  const row = document.createElement('div'); row.className = 'editor-receipt-entry';
+  row.dataset.eventIndex = eventIndex ?? '';
+  row.innerHTML = `<div class="form-grid"><label>입고일<input type="date" data-receipt-field="date" value="${esc(entry.date||today())}" required></label><label>입고수량<input type="number" min="1" max="99999" data-receipt-field="qty" value="${esc(entry.qty||1)}" required></label></div><label>변경된 입고 시리얼번호<textarea data-receipt-field="receivedSerial" maxlength="400" rows="3" placeholder="교환 시 입력 · 동일 제품은 빈칸">${esc(entry.receivedSerial||'')}</textarea></label><label>입고처리<select data-receipt-field="result">${receiptOptionsHtml(entry.result||'')}</select></label><button type="button" class="remove-receipt">입고내역 삭제</button>`;
+  row.querySelector('.remove-receipt').onclick = () => { row.remove(); syncEditorStatus(); };
+  row.querySelector('[data-receipt-field=qty]').oninput = syncEditorStatus;
+  row.querySelector('[data-receipt-field=date]').oninput = updateEditorElapsed;
+  card.querySelector('.editor-receipt-entries').append(row);
+  syncEditorStatus();
+}
+function addEditorReceiptCard(tr, item) {
+  const card = document.createElement('article'); card.className = 'editor-receipt-row'; card.dataset.rowKey = tr.dataset.rowKey;
+  card.innerHTML = `<strong>${esc(item.name||'추가 품목')}</strong><div class="editor-receipt-entries"></div><button type="button" class="add-editor-receipt">입고내역 추가</button>`;
+  $('#editorReceiptSerialRows').append(card);
+  editing.returns.forEach((event,eventIndex) => {
+    event.items.filter(x => x.index === item.sourceIndex).forEach(x => addEditorReceiptEntry(card,{...x,date:event.date,result:event.result},eventIndex));
+  });
+  syncEditorStatus();
+  card.querySelector('.add-editor-receipt').onclick = () => {
+    const received = [...card.querySelectorAll('[data-receipt-field=qty]')].reduce((sum,i) => sum + Number(i.value||0),0);
+    addEditorReceiptEntry(card,{qty:Math.max(1,Number(tr.querySelector('[data-key=qty]').value)-received)});
+  };
+}
+function syncEditorStatus() {
+  if (!editing) return;
+  const rows = [...$('#items').children];
+  const counts = rows.map(tr => {
+    const card = $('#editorReceiptSerialRows').querySelector(`[data-row-key="${tr.dataset.rowKey}"]`);
+    return [Number(tr.querySelector('[data-key=qty]').value), [...(card?.querySelectorAll('[data-receipt-field=qty]')||[])].reduce((sum,input)=>sum+Number(input.value||0),0)];
+  });
+  const status = $('#slipForm [name=status]');
+  if (counts.length && counts.every(([sent,received]) => sent > 0 && sent === received)) status.value='반환완료';
+  else if (counts.some(([,received]) => received > 0)) status.value='부분반환';
+  else if (['부분반환','반환완료'].includes(status.value)) status.value='접수';
+  updateEditorElapsed();
+}
+function updateEditorElapsed() {
+  if (!editing) return;
+  const start = $('#receiptDate').value;
+  const dates = [...$('#editorReceiptSerialRows').querySelectorAll('[data-receipt-field=date]')].map(i=>i.value).filter(Boolean);
+  const koreaDate = new Date(Date.now()+9*3600000).toISOString().slice(0,10);
+  const end = $('#slipForm [name=status]').value === '반환완료' && dates.length ? dates.sort().at(-1) : koreaDate;
+  $('#editorElapsed').textContent = start ? `경과 ${Math.max(0,Math.round((Date.parse(end)-Date.parse(start))/86400000))}일` : '';
+}
 function openEditor(s = null) {
   editing = s;
-  const f = $('#slipForm'); f.reset(); $('#items').innerHTML = '';
-  supplierOptions(s?.supplier);
-  refreshProductSuggestions();
+  const f = $('#slipForm'); f.reset(); $('#items').innerHTML = ''; $('#editorReceiptSerialRows').innerHTML='';
+  supplierOptions(s?.supplier); refreshProductSuggestions();
   $('#editorTitle').textContent = s ? '전표 수정 · ' + s.number : '전표 작성';
-  const locked = Boolean(s?.returns.length);
-  f.elements.status.innerHTML = ['접수','발송','처리중', ...(locked?[s.status]:[])].map(v => `<option>${v}</option>`).join('');
-  f.elements.status.disabled = locked;
-  if (s) {
-    for (const [k,v] of Object.entries(s)) if (k !== 'requesters' && f.elements.namedItem(k)) f.elements.namedItem(k).value = v;
-    f.querySelectorAll('[name=requesters]').forEach(c => c.checked = s.requesters.includes(c.value));
-    s.items.forEach(itemRow);
-  } else { f.elements.date.value = today(); itemRow(); }
+  $('#editorNumberField').hidden = !s;
+  f.elements.number.disabled = !s;
+  f.elements.status.innerHTML = ['접수','발송','처리중', ...(s?['부분반환','반환완료']:[])].map(v=>`<option>${v}</option>`).join('');
+  f.elements.status.disabled = false;
+  const source = s || settings;
+  for (const [k,v] of Object.entries(source)) if (k !== 'requesters' && f.elements.namedItem(k)) f.elements.namedItem(k).value=v;
+  f.querySelectorAll('[name=requesters]').forEach(c=>c.checked=Boolean(s?.requesters.includes(c.value)));
+  if (s) s.items.forEach(itemRow); else {f.elements.date.value=today(); itemRow();}
+  if (s) f.elements.status.value=s.status;
   showShippedMonth();
   $('#editorReceiptSerials').hidden = !s;
-  $('#editorReceiptSerialRows').innerHTML = s ? s.items.map(item => `<article class="editor-receipt-row"><strong>${esc(item.name)}</strong><div class="form-grid"><label>출고 시리얼번호<input aria-label="${esc(item.name)} 출고 시리얼 확인" value="${esc(item.serial||'')}" readonly></label><label>변경된 입고 시리얼번호<textarea aria-label="${esc(item.name)} 변경된 입고 시리얼 확인" rows="2" readonly>${esc(item.receivedSerial||'')}</textarea></label></div></article>`).join('') : '';
-  $('#itemLock').hidden = !locked;
-  $('#addItem').disabled = locked;
-  $('#items').querySelectorAll('input').forEach(i => i.readOnly = locked);
-  $('#items').querySelectorAll('button').forEach(b => b.disabled = locked);
+  $('#editorElapsed').textContent = s ? `경과 ${s.elapsedDays}일` : '';
+  $('#itemLock').hidden = !s;
+  $('#addItem').disabled=false;
   $('#editor').showModal();
 }
 $('#newBtn').onclick = () => openEditor();
@@ -93,7 +147,12 @@ $('#slipForm').onsubmit = async e => {
   e.preventDefault();
   const data = {...(editing || settings), ...Object.fromEntries(new FormData(e.target))};
   data.requesters = new FormData(e.target).getAll('requesters');
-  data.items = [...$('#items').children].map(tr => Object.fromEntries([...tr.querySelectorAll('[data-key]')].map(i => [i.dataset.key,i.value])));
+  const itemRows = [...$('#items').children];
+  data.items = itemRows.map(tr=>({...Object.fromEntries([...tr.querySelectorAll('[data-key]')].map(i=>[i.dataset.key,i.value])),sourceIndex:tr.dataset.sourceIndex === '' ? null : Number(tr.dataset.sourceIndex)}));
+  if (editing) data.receiptEdits = itemRows.flatMap((tr,index)=>{
+    const card=$('#editorReceiptSerialRows').querySelector(`[data-row-key="${tr.dataset.rowKey}"]`);
+    return [...card.querySelectorAll('.editor-receipt-entry')].map(row=>({index,eventIndex:row.dataset.eventIndex === '' ? null : Number(row.dataset.eventIndex),date:row.querySelector('[data-receipt-field=date]').value,qty:Number(row.querySelector('[data-receipt-field=qty]').value),result:row.querySelector('[data-receipt-field=result]').value,receivedSerial:row.querySelector('[data-receipt-field=receivedSerial]').value}));
+  });
   if (!data.company) return toast('먼저 보낸이 설정에서 업체명을 입력하세요.');
   const btn = e.submitter; btn.disabled = true;
   try { await api('/api/slips', data); $('#editor').close(); await reload(); toast('전표가 저장되었습니다.'); }
@@ -164,6 +223,7 @@ function renderReceiptOptionRows() {
 function refreshReceiptSelections() {
   const select = $('#returnForm [name=result]'), current = select.value;
   select.innerHTML = receiptOptionsHtml(receiptOptions.includes(current) || select.disabled ? current : '');
+  $('#editorReceiptSerialRows').querySelectorAll('[data-receipt-field=result]').forEach(input=>{ input.innerHTML=receiptOptionsHtml(input.value); });
   $('#returnHistory').querySelectorAll('[data-history-result]').forEach(input => {
     input.innerHTML = receiptOptionsHtml(input.value);
   });

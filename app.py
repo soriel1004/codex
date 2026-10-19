@@ -1,6 +1,6 @@
 """AS 전표 관리 — Python 표준 라이브러리만 사용합니다."""
 import io, json, os, re, sqlite3, zipfile
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
@@ -21,6 +21,10 @@ def db():
     c.execute('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)')
     return c
 
+def korea_today():
+    return datetime.now(timezone(timedelta(hours=9))).date()
+
+
 def next_slip_number(c, date):
     # The caller holds a write transaction. Preserve issued numbers and reserve
     # suffixes even when an existing slip's receipt date has later been edited.
@@ -36,23 +40,25 @@ def next_slip_number(c, date):
 
 
 def normalize(r):
+    current_date = korea_today()
     # Upgrade old completed slips in memory without losing their original return date.
     if 'returns' not in r:
         r['returns'] = ([{'date': r.get('returned', ''), 'result': r.get('result', ''),
                           'items': [{'index': i, 'qty': int(item['qty'])} for i, item in enumerate(r['items'])]}]
                         if r.get('status') == '반환완료' else [])
     r.setdefault('version', 0)
-    r.setdefault('shippedDate', '')
+    r.setdefault('shippedDate', '')  # Legacy shipping date is retained in storage only.
     r.setdefault('trackingNumber', '')
     r.setdefault('courier', '')
     r.setdefault('requesters', [])
-    r['shippedMonth'] = str(int(r['shippedDate'][5:7])) + '월' if r['shippedDate'] else ''
+    r['shippedMonth'] = str(int(r['date'][5:7])) + '월'
     for i, item in enumerate(r['items']):
         # Preserve old model information as part of the unified product name.
         if item.get('model'):
             item['name'] = ' '.join(filter(None, (item.get('name', ''), item['model'])))
         item.pop('model', None)
         item.setdefault('productionMonth', '')
+        item['sourceIndex'] = i
         item['receivedSerial'] = '\n'.join(x.get('receivedSerial', '') for event in r['returns'] for x in event['items'] if x['index'] == i and x.get('receivedSerial'))
         item['returnedQty'] = sum(int(x['qty']) for event in r['returns'] for x in event['items'] if x['index'] == i)
         item['remainingQty'] = int(item['qty']) - item['returnedQty']
@@ -60,6 +66,8 @@ def normalize(r):
         latest = max(received, key=lambda pair: (pair[1]['date'], pair[0]))[1] if received else {}
         item['receiptTreatment'] = latest.get('result', '')
         item['receivedDate'] = latest.get('date', '')
+        item_end = datetime.strptime(item['receivedDate'], '%Y-%m-%d').date() if item['remainingQty'] == 0 and item['receivedDate'] else current_date
+        item['elapsedDays'] = max(0, (item_end - datetime.strptime(r['date'], '%Y-%m-%d').date()).days)
     if all(i['remainingQty'] == 0 for i in r['items']):
         r['status'] = '반환완료'
     elif r['returns']:
@@ -67,6 +75,10 @@ def normalize(r):
     r['returned'] = max((e['date'] for e in r['returns']), default='')
     if r['returns']:
         r['result'] = max(enumerate(r['returns']), key=lambda pair: (pair[1]['date'], pair[0]))[1].get('result', '')
+    else:
+        r['result'] = ''
+    end = datetime.strptime(r['returned'], '%Y-%m-%d').date() if r['status'] == '반환완료' else current_date
+    r['elapsedDays'] = max(0, (end - datetime.strptime(r['date'], '%Y-%m-%d').date()).days)
     return r
 
 
@@ -176,21 +188,81 @@ def apply_return(r, data, c=None):
     return normalize(r)
 
 
+def editor_returns(old, data, items, c):
+    """Validate editable receipt rows and preserve unchanged partial-return groups."""
+    edits = data.get('receiptEdits')
+    if edits is None:
+        # Older API clients can still edit product details without replacing history.
+        mapping = {}
+        for index,item in enumerate(items):
+            source = item.get('sourceIndex', index)
+            if source is not None:
+                if type(source) is not int or not 0 <= source < len(old['items']) or source in mapping:
+                    raise ValueError('수정 품목의 원본 연결이 올바르지 않습니다.')
+                mapping[source] = index
+        result = []
+        for event in old['returns']:
+            entries = []
+            for entry in event['items']:
+                if entry['index'] not in mapping:
+                    raise ValueError('입고된 품목을 삭제하려면 전표 수정 화면에서 입고내역도 함께 수정하세요.')
+                entries.append(dict(entry, index=mapping[entry['index']]))
+            result.append(dict(event, items=entries))
+    else:
+        if not isinstance(edits, list) or len(edits) > 1000:
+            raise ValueError('입고내역이 올바르지 않습니다.')
+        groups = {}
+        for order, edit in enumerate(edits):
+            index, qty = edit.get('index'), edit.get('qty')
+            if type(index) is not int or not 0 <= index < len(items) or type(qty) is not int or qty < 1:
+                raise ValueError('입고 품목과 수량을 확인하세요.')
+            date = valid_date(edit.get('date', ''))
+            previous_index = edit.get('eventIndex')
+            previous = ''
+            if previous_index is not None:
+                if type(previous_index) is not int or not 0 <= previous_index < len(old['returns']):
+                    raise ValueError('입고내역의 원본 연결이 올바르지 않습니다.')
+                previous = old['returns'][previous_index].get('result', '')
+            treatment = receipt_treatment(edit.get('result', ''), previous, c)
+            serial = clean_received_serial(edit.get('receivedSerial', ''))
+            key = (previous_index if previous_index is not None else f'new-{order}', date, treatment)
+            event = groups.setdefault(key, {'date':date, 'result':treatment, 'items':[]})
+            if any(entry['index'] == index for entry in event['items']):
+                raise ValueError('같은 입고내역의 품목이 중복되었습니다.')
+            event['items'].append({'index':index, 'qty':qty, **({'receivedSerial':serial} if serial else {})})
+        # Preserve original chronological entry order when receipt cards are grouped by product.
+        result = [event for key,event in sorted(groups.items(), key=lambda pair: (isinstance(pair[0][0],str), int(pair[0][0].split('-')[1]) if isinstance(pair[0][0],str) else pair[0][0]))]
+    totals = [0] * len(items)
+    for event in result:
+        if event['date'] < data['date']:
+            raise ValueError('입고일은 접수일 (출고일)보다 빠를 수 없습니다.')
+        for entry in event['items']:
+            totals[entry['index']] += entry['qty']
+    if any(total > int(item['qty']) for total,item in zip(totals, items)):
+        raise ValueError('입고수량이 출고수량을 초과합니다. 수량 또는 입고내역을 함께 수정하세요.')
+    expected = '반환완료' if all(total == int(item['qty']) for total,item in zip(totals, items)) else '부분반환' if any(totals) else None
+    if expected and data['status'] != expected:
+        raise ValueError(f'입고수량에 맞춰 진행상태를 {expected}(으)로 선택하세요.')
+    if not expected and data['status'] in ('부분반환','반환완료'):
+        raise ValueError('선택한 진행상태에 맞는 입고내역을 입력하세요.')
+    return result
+
+
 def xlsx(rows):
-    headers = ['전표번호', '접수일', '출고일', '출고 월', '택배사', '출고 송장번호',
+    headers = ['전표번호', '접수일 (출고일)', '출고월', '택배사', '출고 송장번호',
                '의뢰업체', '받는이', '보낸이', '품명', '생산 년월', '출고 시리얼번호',
                '입고 시리얼번호', '수량', '불량 증상', '구분', '진행상태', '비고',
-               '반환수량', '미반환수량', '입고처리', '입고일']
+               '반환수량', '미반환수량', '경과일수', '입고처리', '입고일']
     table = [headers]
     for r in rows:
         for item in r['items']:
             table.append([
-                r['number'], r['date'], r.get('shippedDate', ''), r.get('shippedMonth', ''),
+                r['number'], r['date'], r.get('shippedMonth', ''),
                 r.get('courier', ''), r.get('trackingNumber', ''), ' · '.join(r.get('requesters', [])),
                 r['supplier'], r.get('company', ''), item.get('name', ''), item.get('productionMonth', ''),
                 item.get('serial', ''), item.get('receivedSerial', ''), item.get('qty', 1),
                 item.get('fault', ''), r['kind'], r['status'], r.get('note', ''), item['returnedQty'],
-                item['remainingQty'], item.get('receiptTreatment', ''), item.get('receivedDate', '')])
+                item['remainingQty'], item['elapsedDays'], item.get('receiptTreatment', ''), item.get('receivedDate', '')])
     def col(i):
         s = ''
         while i:
@@ -361,12 +433,6 @@ class Handler(BaseHTTPRequestHandler):
                             valid_date(month + '-01')
                         if len(item['name']) > 120:
                             raise ValueError('품명은 120자 이내로 입력하세요.')
-                    if old and old['returns']:
-                        fields = ('name','serial','qty','fault','productionMonth')
-                        if len(items) != len(old['items']) or any(str(a.get(k,'')) != str(b.get(k,'')) for a,b in zip(items,old['items']) for k in fields):
-                            raise ValueError('반환 이력이 있는 전표의 품목은 변경할 수 없습니다.')
-                        if data['date'] > min(e['date'] for e in old['returns']):
-                            raise ValueError('접수일은 반환일 이후로 변경할 수 없습니다.')
                     if data.get('status') not in ('접수','발송','처리중','부분반환','반환완료'):
                         raise ValueError('진행상태가 올바르지 않습니다.')
                     result = dict(old or {})
@@ -374,12 +440,17 @@ class Handler(BaseHTTPRequestHandler):
                     result.update({k: data[k] for k in keys if k in data})
                     result['requesters'] = [name for name in ('GN','대일') if name in requesters]
                     result['items'] = [{k:v for k,v in item.items() if k in ('name','serial','qty','fault','productionMonth')} for item in items]
-                    result['returns'] = old['returns'] if old else []
+                    result['returns'] = editor_returns(old, data, items, c) if old else []
                     result['version'] = old['version'] + 1 if old else 0
                     if not result['returns'] and result['status'] in ('부분반환', '반환완료'):
                         raise ValueError('반환은 목록의 반환 버튼으로 처리하세요.')
                     if old:
-                        result['number'] = old['number']
+                        number = str(data.get('number', old['number'])).strip()
+                        if not number or len(number) > 60 or any(ord(ch) < 32 for ch in number):
+                            raise ValueError('전표번호를 1~60자로 입력하세요.')
+                        if any(json.loads(body).get('number') == number for other_id,body in c.execute('SELECT id,body FROM slips WHERE id<>?', (id,))):
+                            raise ValueError('이미 사용 중인 전표번호입니다.')
+                        result['number'] = number
                     else:
                         result['number'] = next_slip_number(c, data['date'])
                         cursor = c.execute('INSERT INTO slips(body) VALUES(?)', ('{}',))
