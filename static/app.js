@@ -1,6 +1,6 @@
 const $ = s => document.querySelector(s);
 let editorRowSequence = 0;
-let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [], receiptOptionRows = [], editing = null, returning = null, view = 'active';
+let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [], receiptOptionRows = [], editing = null, returning = null, deleting = null, view = 'active';
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const total = (s, key) => s.items.reduce((n, i) => n + Number(i[key] || 0), 0);
@@ -79,6 +79,30 @@ function elapsedIndicator(s) {
   const band = s.elapsedDays <= 7 ? 0 : s.elapsedDays <= 14 ? 1 : s.elapsedDays <= 21 ? 2 : 3;
   return `<span class="elapsed-days elapsed-band-${band}" title="${['0~7일','8~14일','15~21일','22일 이상'][band]}">${label}</span>`;
 }
+function slipActions(s) {
+  return `<div class="row-action-buttons">${s.status !== '반환완료' ? `<div class="action-row"><button data-return="${s.id}" class="return-button">부분완료</button><button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">완료</button></div>` : ''}<div class="action-row"><button data-edit="${s.id}">수정</button><button data-print="${s.id}">전표 출력</button><button data-delete="${s.id}" class="delete-button">삭제</button></div></div>`;
+}
+function openDelete(s) {
+  if (!s) return;
+  deleting = {id:s.id, version:s.version};
+  $('#deleteSlipNumber').textContent = s.number;
+  $('#deleteSlipDetails').textContent = `${s.date} · ${s.supplier} · ${statusLabel(s.status)} · ${s.items.length}품목`;
+  $('#deleteDialog').showModal();
+  $('#deleteCancel').focus();
+}
+$('#deleteForm').onsubmit = async e => {
+  e.preventDefault();
+  if (!deleting) return;
+  const button = $('#deleteConfirm'); button.disabled = true;
+  try {
+    await api('/api/slips/delete', deleting);
+    $('#deleteDialog').close();
+    await reload();
+    toast('전표를 삭제했습니다.');
+  } catch (err) { toast(err.message); }
+  finally { button.disabled = false; }
+};
+$('#deleteDialog').addEventListener('close', () => { deleting = null; });
 function render() {
   const q = $('#search').value.trim().toLowerCase(), status = $('#statusFilter').value;
   const requester = $('#requesterFilter').value;
@@ -91,7 +115,7 @@ function render() {
     ['완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
     ['받는이', suppliers.length, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions"><div class="row-action-buttons">${s.status!=='반환완료'?`<button data-return="${s.id}" class="return-button">부분완료</button> <button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">완료</button> `:''}<button data-edit="${s.id}">수정</button> <button data-print="${s.id}">전표 출력</button></div></td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${slipActions(s)}</td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
   $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
@@ -401,6 +425,7 @@ document.addEventListener('click', async e => {
   if (b.dataset.view) { view = b.dataset.view; $('#statusFilter').value = ''; render(); }
   if (b.dataset.edit) openEditor(slips.find(s => s.id === Number(b.dataset.edit)));
   if (b.dataset.print) preview(slips.find(s => s.id === Number(b.dataset.print)));
+  if (b.dataset.delete) openDelete(slips.find(s => s.id === Number(b.dataset.delete)));
   if (b.dataset.track) openTracking(slips.find(s => s.id === Number(b.dataset.track)));
   if (b.dataset.return) openReturn(slips.find(s => s.id === Number(b.dataset.return)));
   if (b.dataset.returnAll) openReturn(slips.find(s => s.id === Number(b.dataset.returnAll)), true);

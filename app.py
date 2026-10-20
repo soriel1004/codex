@@ -29,18 +29,29 @@ def korea_today():
     return datetime.now(timezone(timedelta(hours=9))).date()
 
 
+def reserve_slip_number(c, number):
+    match = re.fullmatch(r'(\d{6})-(\d+)', number)
+    if match:
+        c.execute('INSERT INTO app_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE '
+                  'SET value=MAX(CAST(app_meta.value AS INTEGER),CAST(excluded.value AS INTEGER))',
+                  ('slip_number_max:' + match[1], str(int(match[2]))))
+
+
 def next_slip_number(c, date):
     # The caller holds a write transaction. Preserve issued numbers and reserve
     # suffixes even when an existing slip's receipt date has later been edited.
     prefix = datetime.strptime(date, '%Y-%m-%d').strftime('%y%m%d')
-    count, highest = 0, 0
+    reserved = c.execute('SELECT value FROM app_meta WHERE key=?', ('slip_number_max:' + prefix,)).fetchone()
+    count, highest = 0, int(reserved[0]) if reserved else 0
     for (body,) in c.execute('SELECT body FROM slips'):
         r = json.loads(body)
         count += r.get('date') == date
         match = re.fullmatch(re.escape(prefix) + r'-(\d+)', r.get('number', ''))
         if match:
             highest = max(highest, int(match[1]))
-    return f'{prefix}-{max(count, highest) + 1:02d}'
+    number = f'{prefix}-{max(count, highest) + 1:02d}'
+    reserve_slip_number(c, number)
+    return number
 
 
 def normalize(r):
@@ -347,6 +358,22 @@ class Handler(BaseHTTPRequestHandler):
             if length>200000: raise ValueError('입력 내용이 너무 큽니다.')
             data=json.loads(self.rfile.read(length))
             path=urlparse(self.path).path
+            if path == '/api/slips/delete':
+                id, version = data.get('id'), data.get('version')
+                if type(id) is not int or id <= 0 or type(version) is not int or version < 0:
+                    raise ValueError('삭제할 전표와 최신 버전을 확인하세요.')
+                with db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    row = c.execute('SELECT body FROM slips WHERE id=?', (id,)).fetchone()
+                    if not row:
+                        return self.send({'error':'이미 삭제되었거나 없는 전표입니다.'},status=404)
+                    saved = json.loads(row[0])
+                    if version != saved.get('version', 0):
+                        return self.send({'error':'다른 작업에서 전표가 변경되었습니다. 목록을 새로고침 후 다시 확인하세요.'},status=409)
+                    # Keep issued numbers reserved even after removing their slip.
+                    reserve_slip_number(c, saved.get('number', ''))
+                    c.execute('DELETE FROM slips WHERE id=?', (id,))
+                return self.send({'ok': True, 'id': id})
             if path in ('/api/receipt-options', '/api/receipt-options/delete'):
                 with db() as c:
                     c.execute('BEGIN IMMEDIATE')

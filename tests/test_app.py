@@ -95,6 +95,55 @@ class Workflow(unittest.TestCase):
         self.assertEqual(s['status'], '반환완료')
         self.assertEqual(sum(i['returnedQty'] for i in s['items']), 4)
 
+    def test_delete_active_partial_completed_slips_and_excel_exclusion(self):
+        active = self.create()
+        partial = self.ret(self.create(), items=[{'index':0,'qty':1}], mbRepairReport='부분 수리')
+        complete = self.ret(self.create(), all=True, mbRepairReport='완료 수리')
+        for slip in (active, partial, complete):
+            self.assertEqual(self.post('/api/slips/delete', {'id':slip['id'],'version':slip['version']})['ok'], True)
+            self.assertNotIn(slip['id'], [row['id'] for row in self.get('/api/slips')])
+            with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+                self.assertNotIn(slip['number'], z.read('xl/worksheets/sheet1.xml').decode())
+            self.assert_error(404, '/api/slips/delete', {'id':slip['id'],'version':slip['version']})
+        self.assertEqual(self.get('/api/slips'), [])
+        self.assertEqual(self.get('/api/suppliers')[0]['name'], '공급사 A')
+        self.assertEqual(len(self.get('/api/products')), 3)
+        self.assertEqual(self.create()['number'], '261019-04')
+
+    def test_delete_checks_latest_version_and_valid_target(self):
+        s = self.create()
+        for request in ({}, {'id':s['id']}, {'id':True,'version':0}, {'id':str(s['id']),'version':0},
+                        {'id':s['id'],'version':True}, {'id':s['id'],'version':-1}, {'id':0,'version':0}):
+            self.assert_error(400, '/api/slips/delete', request)
+        updated = self.ret(s,items=[{'index':0,'qty':1}])
+        self.assert_error(409, '/api/slips/delete', {'id':s['id'],'version':s['version']})
+        self.assertEqual(self.get('/api/slips')[0]['returns'], updated['returns'])
+        self.assert_error(404, '/api/slips/delete', {'id':999999,'version':0})
+
+    def test_concurrent_deletion_and_return_do_not_overwrite_each_other(self):
+        s = self.create()
+        def submit(path):
+            try:
+                self.post(path, {'id':s['id'],'version':s['version'],'date':'2026-10-20','all':True})
+                return 200
+            except urllib.error.HTTPError as e:
+                return e.code
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(submit, ['/api/slips/delete','/api/returns']))
+        self.assertEqual(outcomes.count(200), 1)
+        self.assertIn(next(code for code in outcomes if code != 200), (404,409))
+        saved = self.get('/api/slips')
+        if saved:
+            self.assertEqual(saved[0]['status'], '반환완료')
+            self.assertEqual(len(saved[0]['returns']), 1)
+
+    def test_deletion_reserves_existing_numbers_without_sequence_metadata(self):
+        s = self.create()
+        with self.app.db() as c:
+            c.execute("DELETE FROM app_meta WHERE key LIKE 'slip_number_max:%'")
+        self.post('/api/slips/delete', {'id':s['id'],'version':s['version']})
+        self.assertEqual(self.create()['number'], '261019-02')
+
     def test_invalid_returns_do_not_mutate_record(self):
         s = self.create()
         base = {'id': s['id'], 'version': s['version'], 'date': '2026-10-20'}
