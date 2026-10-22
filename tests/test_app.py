@@ -18,6 +18,14 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 
+
+def excel_text(cell, namespaces):
+    value = cell.find('s:is/s:t', namespaces)
+    if value is None:
+        value = cell.find('s:v', namespaces)
+    return value.text if value is not None else None
+
+
 class Workflow(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -240,7 +248,7 @@ class Workflow(unittest.TestCase):
                 ET.fromstring(z.read(name))
             sheet = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
             ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-            rows = [[c.find('s:is/s:t', ns).text for c in row] for row in sheet.findall('s:sheetData/s:row', ns)]
+            rows = [[excel_text(c,ns) for c in row] for row in sheet.findall('s:sheetData/s:row', ns)]
             self.assertEqual(len(rows), 4)
             first, second = (dict(zip(rows[0], row)) for row in rows[1:3])
             self.assertEqual(first['출고 시리얼번호'], '001234')
@@ -294,7 +302,7 @@ class Workflow(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
             root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
             ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-            rows = [[c.find('s:is/s:t', ns).text for c in row] for row in root.findall('s:sheetData/s:row', ns)]
+            rows = [[excel_text(c,ns) for c in row] for row in root.findall('s:sheetData/s:row', ns)]
             exported = dict(zip(rows[0], rows[1]))
             self.assertEqual(exported['접수일 (출고일)'], '2026-10-19')
             self.assertEqual(exported['출고월'], '10월')
@@ -353,31 +361,142 @@ class Workflow(unittest.TestCase):
         self.assertEqual(s['requesters'], [])
         self.assertEqual(s['courier'], '')
         self.assertEqual(s['items'][0]['productionMonth'], '')
-        s.update(courier='CJ대한통운', requesters=['대일', 'GN'])
+        s.update(courier='CJ대한통운', requesters=['GN'])
         s['items'][0]['productionMonth'] = '2025-09'
         s = self.post('/api/slips', s)
-        self.assertEqual(s['requesters'], ['GN', '대일'])
+        self.assertEqual(s['requesters'], ['GN'])
         self.assertEqual(s['items'][0]['productionMonth'], '2025-09')
         with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
             root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
             ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-            rows = [[c.find('s:is/s:t', ns).text for c in row] for row in root.findall('s:sheetData/s:row', ns)]
+            rows = [[excel_text(c,ns) for c in row] for row in root.findall('s:sheetData/s:row', ns)]
             record = dict(zip(rows[0], rows[1]))
             self.assertEqual(record['택배사'], 'CJ대한통운')
-            self.assertEqual(record['의뢰업체'], 'GN · 대일')
+            self.assertEqual(record['의뢰업체'], 'GN')
             self.assertEqual(record['생산 년월'], '2025-09')
         s['requesters'] = []
         self.assertEqual(self.post('/api/slips', s)['requesters'], [])
 
     def test_invalid_requesters_and_production_month(self):
         s = self.create()
-        for selection in (['기타'], ['GN', 'GN'], 'GN'):
+        for selection in (['기타'], ['GN', 'GN'], ['GN','대일'], 'GN'):
             bad = dict(s, requesters=selection)
             self.assert_error(400, '/api/slips', bad)
         for month in ('2025-13', '2025-01-01', '2025-1'):
             bad = copy.deepcopy(s)
             bad['items'][0]['productionMonth'] = month
             self.assert_error(400, '/api/slips', bad)
+
+    def test_legacy_dual_requesters_are_preserved_until_explicit_choice(self):
+        s = self.create()
+        s['requesters'] = ['GN','대일']
+        with self.app.db() as c:
+            c.execute('UPDATE slips SET body=? WHERE id=?', (json.dumps(s),s['id']))
+        old = self.get('/api/slips')[0]
+        self.assertEqual(old['requesters'], ['GN','대일'])
+        self.assert_error(400, '/api/slips', old)
+        self.assertEqual(self.get('/api/slips')[0]['requesters'], ['GN','대일'])
+        old['requesters'] = ['대일']
+        self.assertEqual(self.post('/api/slips',old)['requesters'], ['대일'])
+
+    def report_sample(self):
+        def slip(number, sent, quantities, events, requester='GN'):
+            return {'number':number,'date':sent,'supplier':'받는이 <A> & B','company':'내 업체','kind':'AS 발송',
+                    'requesters':[requester],'status':'발송','items':[{'name':f'품목 {i}','qty':qty,'serial':f'000{i}'} for i,qty in enumerate(quantities)],
+                    'returns':[{'date':when,'result':'수리','items':[{'index':i,'qty':qty} for i,qty in entries]} for when,entries in events]}
+        records = [slip('R-001','2026-01-15',[6,4],[('2026-01-20',[(0,2)]),('2026-02-05',[(0,4),(1,1)]),('2026-03-01',[(1,3)])]),
+                   slip('R-002','2026-02-10',[5],[('2026-02-20',[(0,2)])],'대일'),
+                   slip('R-003','2026-03-25',[4],[]),
+                   slip('R-004','2026-02-28',[1],[('2026-03-02',[(0,1)])])]
+        return [self.app.normalize(r) for r in records]
+
+    def test_report_months_partial_receipts_weighted_lead_time_and_backlog(self):
+        from excel_report import analyse
+        with patch.object(self.app,'korea_today',return_value=date(2026,3,31)):
+            records = self.report_sample()
+            report = analyse(records,date(2026,3,31))
+        self.assertEqual(report['totals']['sent'],20)
+        self.assertEqual(report['totals']['received'],13)
+        self.assertEqual(report['totals']['pending'],7)
+        self.assertEqual(report['totals']['complete'],2)
+        self.assertEqual(report['totals']['partial'],1)
+        self.assertEqual(report['totals']['days'],272)
+        january, february, march = report['months']
+        self.assertEqual(january, ['2026-01',1,10,2,8,5,0])
+        self.assertEqual(february[:5], ['2026-02',2,6,7,7])
+        self.assertAlmostEqual(february[5],125/7)
+        self.assertEqual(march, ['2026-03',1,4,4,7,34.25,3])
+        self.assertEqual(report['buckets'], [4,0,0,0,3])
+        self.assertEqual(sum(entry[8] for entry in report['ledger']),13)
+        for kind in ('받는이','의뢰업체'):
+            self.assertEqual(sum(row[3] for row in report['groups'] if row[0]==kind),20)
+
+    def test_report_workbook_charts_numeric_cells_and_relationships(self):
+        import posixpath
+        with patch.object(self.app,'korea_today',return_value=date(2026,3,31)):
+            data = self.app.xlsx(self.report_sample())
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            for filename in z.namelist(): ET.fromstring(z.read(filename))
+            book = ET.fromstring(z.read('xl/workbook.xml'))
+            self.assertEqual([s.attrib['name'] for s in book.find('s:sheets',ns)],
+                             ['AS 누적내역','입고처리목록','AS 보고서','월별 입출고','업체별 현황','입고 상세'])
+            self.assertEqual(book.find('s:bookViews/s:workbookView',ns).attrib['activeTab'],'2')
+            self.assertEqual(len([n for n in z.namelist() if n.startswith('xl/charts/chart')]),4)
+            dashboard = ET.fromstring(z.read('xl/worksheets/sheet3.xml'))
+            values = {c.attrib['r']:excel_text(c,ns) for c in dashboard.findall('.//s:c',ns)}
+            self.assertEqual([values[cell] for cell in ('A7','D7','G7')],['20','13','7'])
+            self.assertAlmostEqual(float(values['J7']),272/13)
+            main = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            self.assertIsNotNone(main.find('.//s:c[@r="P2"]/s:v',ns))
+            self.assertEqual(excel_text(main.find('.//s:c[@r="K2"]',ns),ns),'0000')
+            for name in z.namelist():
+                if not name.endswith('.rels'): continue
+                base = posixpath.dirname(posixpath.dirname(name))
+                for relation in ET.fromstring(z.read(name)):
+                    target = posixpath.normpath(posixpath.join(base,relation.attrib['Target']))
+                    self.assertIn(target,z.namelist())
+            chart_ns = {'c':'http://schemas.openxmlformats.org/drawingml/2006/chart'}
+            sheet_ids = {item.attrib['name']:item.attrib['sheetId'] for item in book.find('s:sheets',ns)}
+            import re
+            for filename in [n for n in z.namelist() if n.startswith('xl/charts/chart')]:
+                chart = ET.fromstring(z.read(filename))
+                for ref in chart.findall('.//c:strRef',chart_ns) + chart.findall('.//c:numRef',chart_ns):
+                    formula = ref.find('c:f',chart_ns).text
+                    match = re.fullmatch(r"'(.+)'!\$([A-Z]+)\$(\d+):\$([A-Z]+)\$(\d+)",formula)
+                    self.assertIsNotNone(match)
+                    source = ET.fromstring(z.read(f'xl/worksheets/sheet{sheet_ids[match[1]]}.xml'))
+                    cache = {int(pt.attrib['idx']):pt.find('c:v',chart_ns).text for pt in ref.findall('.//c:pt',chart_ns)}
+                    for offset,row in enumerate(range(int(match[3]),int(match[5])+1)):
+                        value = excel_text(source.find(f'.//s:c[@r="{match[2]}{row}"]',ns),ns)
+                        self.assertEqual(cache.get(offset),value)
+
+    def test_report_empty_data_and_cross_year_months(self):
+        from excel_report import analyse
+        report = analyse([],date(2026,1,1))
+        self.assertEqual(report['months'], [['2026-01',0,0,0,0,None,0]])
+        with patch.object(self.app,'korea_today',return_value=date(2026,3,31)):
+            records = self.report_sample()
+            records[2]['date'] = '2025-12-25'
+            report = analyse(records,date(2026,3,31))
+            self.assertEqual([row[0] for row in report['months']],['2025-12','2026-01','2026-02','2026-03'])
+            data = self.app.xlsx([])
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            self.assertEqual(len([n for n in z.namelist() if n.startswith('xl/charts/chart')]),4)
+            self.assertNotIn('#DIV/0!',z.read('xl/worksheets/sheet3.xml').decode())
+
+    def test_report_large_treatment_legend_keeps_all_quantities(self):
+        with patch.object(self.app,'korea_today',return_value=date(2026,3,31)):
+            record = self.report_sample()[0]
+            record['items'] = [{'name':'메인보드','qty':12}]
+            record['returns'] = [{'date':'2026-01-20','result':f'유형 {i}', 'items':[{'index':0,'qty':1}]} for i in range(12)]
+            data = self.app.xlsx([self.app.normalize(record)])
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            ns = {'c':'http://schemas.openxmlformats.org/drawingml/2006/chart'}
+            chart = ET.fromstring(z.read('xl/charts/chart4.xml'))
+            values = [int(node.text) for node in chart.findall('.//c:numCache/c:pt/c:v',ns)]
+            self.assertEqual(len(values),8)
+            self.assertEqual(sum(values),12)
 
     def test_replacement_serials_preserve_outbound_and_partial_history(self):
         s = self.create()
@@ -443,7 +562,7 @@ class Workflow(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
             root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
             ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-            rows = [[c.find('s:is/s:t', ns).text for c in row] for row in root.findall('s:sheetData/s:row', ns)]
+            rows = [[excel_text(c,ns) for c in row] for row in root.findall('s:sheetData/s:row', ns)]
             headers = rows[0]
             self.assertEqual(headers[:5], ['전표번호','접수일 (출고일)','출고월','택배사','출고 송장번호'])
             out_index = headers.index('출고 시리얼번호')
@@ -503,7 +622,7 @@ class Workflow(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
             root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
             ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-            rows = [[c.find('s:is/s:t',ns).text for c in row] for row in root.findall('s:sheetData/s:row',ns)]
+            rows = [[excel_text(c,ns) for c in row] for row in root.findall('s:sheetData/s:row',ns)]
             index = rows[0].index('입고 시리얼번호')
             self.assertEqual(rows[0][index:index+3], ['입고 시리얼번호','비고','M/B 수리내역서 작성'])
             first, second, third = [dict(zip(rows[0],row)) for row in rows[1:]]
@@ -654,7 +773,7 @@ class Workflow(unittest.TestCase):
             with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
                 root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
                 ns={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-                rows=[[cell.find('s:is/s:t',ns).text for cell in row] for row in root.findall('s:sheetData/s:row',ns)]
+                rows=[[excel_text(cell,ns) for cell in row] for row in root.findall('s:sheetData/s:row',ns)]
                 record=dict(zip(rows[0],rows[1]))
                 self.assertEqual(record['경과일수'],'4')
                 self.assertEqual(record['접수일 (출고일)'],'2026-10-19')
@@ -670,7 +789,7 @@ class Workflow(unittest.TestCase):
             with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
                 root=ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
                 ns={'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
-                rows=[[cell.find('s:is/s:t',ns).text for cell in row] for row in root.findall('s:sheetData/s:row',ns)]
+                rows=[[excel_text(cell,ns) for cell in row] for row in root.findall('s:sheetData/s:row',ns)]
                 self.assertEqual(dict(zip(rows[0],rows[1]))['경과일수'],'1')
                 self.assertEqual(dict(zip(rows[0],rows[2]))['경과일수'],'6')
 
@@ -697,7 +816,7 @@ class Workflow(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
             ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
             root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
-            rows = [[cell.find('s:is/s:t',ns).text for cell in row] for row in root.findall('s:sheetData/s:row',ns)]
+            rows = [[excel_text(cell,ns) for cell in row] for row in root.findall('s:sheetData/s:row',ns)]
             exported = dict(zip(rows[0], rows[1]))
             self.assertEqual(exported['QR코드번호'], qr)
             index = rows[0].index('입고 시리얼번호')

@@ -6,9 +6,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import urlopen
 from xml.sax.saxutils import escape
+from excel_report import add_as_report
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '1.0.0'
+APP_VERSION = '1.1.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DATA.mkdir(parents=True, exist_ok=True)
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
@@ -331,14 +332,14 @@ def xlsx(rows):
         z.writestr('xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>')
         z.writestr('xl/worksheets/sheet2.xml', option_sheet)
         z.writestr('xl/worksheets/sheet1.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" state="frozen"/></sheetView></sheetViews><cols><col min="1" max="'+str(len(headers))+'" width="22" customWidth="1"/></cols><sheetData>'+''.join(xmlrows)+'</sheetData><autoFilter ref="A1:'+col(len(headers))+str(len(table))+'"/>'+validation+'</worksheet>')
-    return out.getvalue()
+    return add_as_report(out.getvalue(), rows, korea_today(), APP_VERSION)
 
 class Handler(BaseHTTPRequestHandler):
     def send(self, body, content='application/json; charset=utf-8', status=200):
         if not isinstance(body,bytes): body=json.dumps(body,ensure_ascii=False).encode()
         self.send_response(status); self.send_header('Content-Type',content)
         self.send_header('Content-Length',str(len(body))); self.send_header('Cache-Control','no-store')
-        if content.startswith('application/vnd'): self.send_header('Content-Disposition','attachment; filename="AS-history.xlsx"')
+        if content.startswith('application/vnd'): self.send_header('Content-Disposition',f'attachment; filename="AS-report-V{APP_VERSION}.xlsx"')
         self.end_headers(); self.wfile.write(body)
     def do_GET(self):
         path=urlparse(self.path).path
@@ -468,8 +469,8 @@ class Handler(BaseHTTPRequestHandler):
                     if data.get('shippedDate'):
                         valid_date(data['shippedDate'])
                     requesters = data.get('requesters', old.get('requesters', []) if old else [])
-                    if not isinstance(requesters, list) or any(x not in ('GN', '대일') for x in requesters) or len(set(requesters)) != len(requesters):
-                        raise ValueError('의뢰업체는 GN, 대일 중 선택하거나 선택하지 않을 수 있습니다.')
+                    if not isinstance(requesters, list) or len(requesters) > 1 or any(x not in ('GN', '대일') for x in requesters):
+                        raise ValueError('AS 의뢰업체는 GN 또는 대일 중 한 곳만 선택하거나 선택하지 않을 수 있습니다.')
                     if not isinstance(data.get('courier', ''), str) or len(data.get('courier', '')) > 40:
                         raise ValueError('택배사는 40자 이내로 입력하세요.')
                     if len(str(data.get('trackingNumber', ''))) > 60:

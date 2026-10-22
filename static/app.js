@@ -165,7 +165,14 @@ function updateGnQrColumns() {
   $('#slipForm .item-table').classList.toggle('has-gn-qr', enabled);
   $('#editor').classList.toggle('gn-editor', enabled);
 }
-$('#slipForm [name=requesters][value=GN]').addEventListener('change', updateGnQrColumns);
+function updateRequesterSelection() {
+  const choices = [...$('#slipForm').querySelectorAll('[name=requesters]')];
+  const selected = choices.filter(input => input.checked);
+  choices.forEach(input => { input.disabled = selected.length === 1 && !input.checked; });
+  $('#requesterLegacyNotice').hidden = selected.length <= 1;
+  updateGnQrColumns();
+}
+$('#slipForm').querySelectorAll('[name=requesters]').forEach(input => input.addEventListener('change', updateRequesterSelection));
 let lastScannerTerminator = -Infinity;
 $('#slipForm').addEventListener('input', () => { lastScannerTerminator = -Infinity; });
 $('#slipForm').addEventListener('keydown', e => {
@@ -246,7 +253,7 @@ function openEditor(s = null) {
   for (const [k,v] of Object.entries(source)) if (k !== 'requesters' && f.elements.namedItem(k)) f.elements.namedItem(k).value=v;
   f.querySelectorAll('[name=requesters]').forEach(c=>c.checked=Boolean(s?.requesters.includes(c.value)));
   if (s) s.items.forEach(itemRow); else {f.elements.date.value=today(); itemRow();}
-  updateGnQrColumns(); lastScannerTerminator = -Infinity;
+  updateRequesterSelection(); lastScannerTerminator = -Infinity;
   f.elements.status.value = s ? s.status : '발송';
   showShippedMonth();
   $('#editorReceiptSerials').hidden = !s;
@@ -261,6 +268,7 @@ $('#slipForm').onsubmit = async e => {
   e.preventDefault();
   const data = {...(editing || settings), ...Object.fromEntries(new FormData(e.target))};
   data.requesters = new FormData(e.target).getAll('requesters');
+  if (data.requesters.length > 1) return toast('AS 의뢰업체는 GN 또는 대일 중 한 곳만 선택하세요.');
   const itemRows = [...$('#items').children];
   data.items = itemRows.map(tr=>({...Object.fromEntries([...tr.querySelectorAll('[data-key]')].map(i=>[i.dataset.key,i.value])),sourceIndex:tr.dataset.sourceIndex === '' ? null : Number(tr.dataset.sourceIndex)}));
   if (editing) data.receiptEdits = itemRows.flatMap((tr,index)=>{
