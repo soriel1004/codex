@@ -118,3 +118,5 @@ header{min-height:83px;height:auto;gap:12px;flex-wrap:wrap;padding-top:15px;padd
 .delete-button{color:#b42318;border-color:#efc2bf}button.danger{background:#b42318;border-color:#b42318;color:white}button.danger:hover{background:#941d14}#deleteDialog{width:min(500px,94vw)}#deleteDialog p{overflow-wrap:anywhere;line-height:1.7}
 
 #editor.gn-editor{width:min(1240px,96vw)}.item-table.has-gn-qr{min-width:1080px}.item-table [data-key=serial]{min-width:140px}.item-table [data-key=qrCodeNumber]{min-width:180px}
+
+.heading-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.app-version{font-size:12px;font-weight:bold;color:#5375ae;background:#e9effa;border:1px solid #d6e1f2;border-radius:6px;padding:5px 8px;white-space:nowrap}

@@ -8,6 +8,7 @@ from urllib.request import urlopen
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parent
+APP_VERSION = '1.0.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DATA.mkdir(parents=True, exist_ok=True)
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
@@ -353,7 +354,10 @@ class Handler(BaseHTTPRequestHandler):
         files={'/':'index.html','/app.js':'app.js','/style.css':'style.css'}
         if path not in files: return self.send({'error':'찾을 수 없습니다.'},status=404)
         file=ROOT/'static'/files[path]
-        return self.send(file.read_bytes(), {'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}[file.suffix[1:]])
+        body = file.read_bytes()
+        if file.suffix == '.html':
+            body = body.replace(b'{{APP_VERSION}}', APP_VERSION.encode('ascii'))
+        return self.send(body, {'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}[file.suffix[1:]])
     def do_POST(self):
         try:
             length=int(self.headers.get('Content-Length',0))
@@ -567,7 +571,7 @@ def existing_program(url):
 def main():
     host = os.environ.get('AS_HOST', '127.0.0.1')
     port = int(os.environ.get('PORT', '8000'))
-    print(f'AS 전표 관리: http://{host}:{port}', flush=True)
+    print(f'AS 전표 관리 V{APP_VERSION}: http://{host}:{port}', flush=True)
     try:
         server = ThreadingHTTPServer((host, port), Handler)
     except OSError:
