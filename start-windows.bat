@@ -6,6 +6,9 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-start "" "http://127.0.0.1:8000"
-py -3 app.py
-pause
+if /i not "%~1"=="--minimized" (
+  start "AS Slip Manager" /min "%ComSpec%" /d /c ""%~f0" --minimized"
+  exit /b
+)
+py -3 app.py --open-browser
+if errorlevel 1 pause

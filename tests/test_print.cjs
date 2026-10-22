@@ -29,7 +29,7 @@ const {spawn, execFileSync} = require('node:child_process');
       mbRepairReport:'REPAIR-REPORT-PRIVATE', result:'RECEIPT-RESULT-PRIVATE', returned:'2026-10-25',
       supplier:'공급사', company:'내 업체', phone:'010-1234-5678', companyPhone:'02-123-4567',
       shippedDate:'2031-12-24',shippedMonth:'12월',trackingNumber:'0000-TRACKING-PRIVATE',courier:'COURIER-PRIVATE',requesters:['GN','대일'],
-      items:[{name:'메모리 DDR5',model:'MODEL-PRIVATE',serial:'001234',productionMonth:'2025-09',receivedSerial:'000NEW-PRINT',qty:2,returnedQty:0,fault:'부팅 불가 LAST-FAULT-END'}],
+      items:[{name:'메모리 DDR5',model:'MODEL-PRIVATE',serial:'001234',qrCodeNumber:'000QR-PRINT-PRIVATE',productionMonth:'2025-09',receivedSerial:'000NEW-PRINT',qty:2,returnedQty:0,fault:'부팅 불가 LAST-FAULT-END'}],
       note:'TAIL-NOTE-OK'
     };
     const long = {...basic, supplier:'공급사'.repeat(20), company:'컴퓨터'.repeat(20),
@@ -37,7 +37,7 @@ const {spawn, execFileSync} = require('node:child_process');
       business:'BUSINESS-PRIVATE', manager:'담당자'.repeat(10), result:'RECEIPT-RESULT-PRIVATE'.repeat(25),
       note:'비고 확인 '.repeat(27)+'TAIL-NOTE-OK',
       items:Array.from({length:8},(_,i)=>({name:(`부품${i} `+'긴품명'.repeat(40)).slice(0,120),
-        model:'MODEL-PRIVATE',serial:'SERIAL12'.repeat(5),productionMonth:'2025-09',receivedSerial:'NEW-SERIAL-'.repeat(8),qty:99999,returnedQty:99999,
+        model:'MODEL-PRIVATE',serial:'SERIAL12'.repeat(5),qrCodeNumber:'000QR-PRINT-PRIVATE',productionMonth:'2025-09',receivedSerial:'NEW-SERIAL-'.repeat(8),qty:99999,returnedQty:99999,
         fault:('화면 출력 불량 및 재시작 확인 '.repeat(4)).slice(0,56)+(i===7?'LAST-FAULT-END':'')}))
     };
     const unbroken = {...long, items:long.items.map((i,n)=>({...i, fault:'W'.repeat(56)+(n===7?'LAST-FAULT-END':'W'.repeat(13))}))};
@@ -79,7 +79,7 @@ const {spawn, execFileSync} = require('node:child_process');
       assert.equal(text.split('인계자').length-1,2,`${name}: both sender signatures must survive`);
       assert.equal(text.split('인수자').length-1,2,`${name}: both recipient signatures must survive`);
       assert.equal(text.split('LAST-FAULT-END').length-1,2,`${name}: last item's symptom must survive`);
-      for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','COURIER-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고월','송장번호','공급자','공급받는자','생산년월','입고시리얼번호','입고처리','입고일','2025-09','000NEW-PRINT','NEW-SERIAL-','RECEIPT-RESULT-PRIVATE','2026-10-25','REPAIR-REPORT-PRIVATE','M/B수리내역서','부분반환','반환완료']) {
+      for (const hidden of ['2031-12-24','12월','0000-TRACKING-PRIVATE','COURIER-PRIVATE','MODEL-PRIVATE','ADDRESS-PRIVATE','BUSINESS-PRIVATE','출고월','송장번호','공급자','공급받는자','생산년월','입고시리얼번호','입고처리','입고일','2025-09','000NEW-PRINT','NEW-SERIAL-','RECEIPT-RESULT-PRIVATE','2026-10-25','REPAIR-REPORT-PRIVATE','M/B수리내역서','부분반환','반환완료','000QR-PRINT-PRIVATE','QR코드번호']) {
         assert.ok(!text.includes(hidden),`${name}: must not print ${hidden}`);
       }
       assert.ok(text.includes('받는이보관용') && text.includes('보낸이보관용'),`${name}: updated party labels`);

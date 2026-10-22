@@ -1,5 +1,7 @@
 from datetime import date
 from unittest.mock import patch
+from contextlib import nullcontext
+from types import SimpleNamespace
 import copy
 import importlib.util
 import io
@@ -459,7 +461,7 @@ class Workflow(unittest.TestCase):
             self.assertEqual(second['입고일'], '2026-10-21')
             self.assertIsNone(pending['입고일'])
             validation = root.find('s:dataValidations/s:dataValidation', ns)
-            self.assertEqual(validation.attrib['sqref'], 'V2:V4')
+            self.assertEqual(validation.attrib['sqref'], 'W2:W4')
             self.assertEqual(validation.attrib['type'], 'list')
             self.assertEqual(validation.find('s:formula1', ns).text, 'ReceiptOptions')
             choices_sheet = ET.fromstring(z.read('xl/worksheets/sheet2.xml'))
@@ -677,6 +679,82 @@ class Workflow(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as err:
             self.req('/../app.py')
         self.assertEqual(err.exception.code, 404)
+
+    def test_gn_qr_number_survives_edits_returns_and_excel(self):
+        s = self.create()
+        self.assertEqual(s['items'][0]['qrCodeNumber'], '')
+        qr = '000QR-GN-001 <tag> & "number"'
+        s['requesters'] = ['GN']
+        s['items'][0]['qrCodeNumber'] = qr
+        s = self.post('/api/slips', s)
+        self.assertEqual(self.get('/api/slips')[0]['items'][0]['qrCodeNumber'], qr)
+        s = self.ret(s, items=[{'index':0,'qty':1}])
+        s = self.ret(s, all=True)
+        self.assertEqual(s['items'][0]['qrCodeNumber'], qr)
+        s['requesters'] = []
+        s = self.post('/api/slips', s)
+        self.assertEqual(s['items'][0]['qrCodeNumber'], qr)
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as z:
+            ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            rows = [[cell.find('s:is/s:t',ns).text for cell in row] for row in root.findall('s:sheetData/s:row',ns)]
+            exported = dict(zip(rows[0], rows[1]))
+            self.assertEqual(exported['QR코드번호'], qr)
+            index = rows[0].index('입고 시리얼번호')
+            self.assertEqual(rows[0][index:index+4], ['입고 시리얼번호','비고','M/B 수리내역서 작성','QR코드번호'])
+            self.assertIsNone(dict(zip(rows[0],rows[2]))['QR코드번호'])
+
+    def test_qr_number_validation_and_legacy_slips(self):
+        s = self.create()
+        for value in (None, True, [], 'Q'*501):
+            invalid = copy.deepcopy(s)
+            invalid['items'][0]['qrCodeNumber'] = value
+            self.assert_error(400, '/api/slips', invalid)
+        for item in s['items']:
+            item.pop('qrCodeNumber')
+        with self.app.db() as c:
+            c.execute('UPDATE slips SET body=? WHERE id=?', (json.dumps(s),s['id']))
+        self.assertEqual(self.get('/api/slips')[0]['items'][0]['qrCodeNumber'], '')
+
+    def test_windows_browser_command_prefers_default_and_separate_window(self):
+        url = 'http://127.0.0.1:8000'
+        for program, name, flag in [('ChromeHTML','chrome.exe','--new-window'),
+                                    ('FirefoxURL-123','firefox.exe','-new-window'),
+                                    ('MSEdgeHTM','msedge.exe','--new-window')]:
+            registry = SimpleNamespace(HKEY_CURRENT_USER='user',HKEY_LOCAL_MACHINE='machine')
+            def open_key(root,path):
+                if path.endswith('UserChoice') or path.endswith('App Paths\\'+name):
+                    return nullcontext(path)
+                raise OSError('Missing registry key')
+            executable = 'C:\\Program Files\\Browser Folder\\' + name
+            registry.OpenKey = open_key
+            registry.QueryValueEx = lambda path,value: (program if value=='ProgId' else '"'+executable+'"', 1)
+            with patch.dict('sys.modules', {'winreg':registry}), patch.dict(os.environ,{},clear=True), \
+                 patch.object(self.app.os.path,'isfile',side_effect=lambda path:path==executable):
+                self.assertEqual(self.app.windows_browser_command(url), [executable,flag,url])
+        command = [executable,flag,url]
+        with patch.object(self.app.sys,'platform','win32'), patch.object(self.app,'windows_browser_command',return_value=command), \
+             patch.object(self.app.subprocess,'Popen') as launch, patch.object(self.app.webbrowser,'open') as default_open:
+            self.app.open_program_window(url)
+            launch.assert_called_once_with(command)
+            default_open.assert_not_called()
+
+    def test_launch_reuses_running_program_and_binds_before_opening_browser(self):
+        self.assertTrue(self.app.existing_program(self.base))
+        with patch.object(self.app,'ThreadingHTTPServer',side_effect=OSError('Address in use')), \
+             patch.object(self.app,'existing_program',return_value=True), patch.object(self.app,'open_program_window') as open_window, \
+             patch.object(self.app.sys,'argv',['app.py','--open-browser']), patch.dict(os.environ,{'PORT':'8000'}):
+            self.app.main()
+            open_window.assert_called_once_with('http://127.0.0.1:8000')
+        events = []
+        def bind_server(*args):
+            events.append('bind')
+            return SimpleNamespace(server_port=8123,serve_forever=lambda:events.append('serve'))
+        with patch.object(self.app,'ThreadingHTTPServer',side_effect=bind_server), \
+             patch.object(self.app,'open_program_window',side_effect=lambda url:events.append(url)), \
+             patch.object(self.app.sys,'argv',['app.py','--open-browser']):
+            self.app.main()
+        self.assertEqual(events,['bind','http://127.0.0.1:8123','serve'])
 
 
 if __name__ == '__main__':

@@ -1,9 +1,10 @@
 """AS 전표 관리 — Python 표준 라이브러리만 사용합니다."""
-import io, json, os, re, sqlite3, zipfile
+import io, json, os, re, sqlite3, subprocess, sys, webbrowser, zipfile
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
+from urllib.request import urlopen
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parent
@@ -73,6 +74,7 @@ def normalize(r):
             item['name'] = ' '.join(filter(None, (item.get('name', ''), item['model'])))
         item.pop('model', None)
         item.setdefault('productionMonth', '')
+        item.setdefault('qrCodeNumber', '')
         item['sourceIndex'] = i
         item['receivedSerial'] = '\n'.join(x.get('receivedSerial', '') for event in r['returns'] for x in event['items'] if x['index'] == i and x.get('receivedSerial'))
         item['mbRepairReport'] = '\n'.join(event['mbRepairReport'] for event in r['returns']
@@ -283,7 +285,7 @@ def editor_returns(old, data, items, c):
 def xlsx(rows):
     headers = ['전표번호', '접수일 (출고일)', '출고월', '택배사', '출고 송장번호',
                '의뢰업체', '받는이', '보낸이', '품명', '생산 년월', '출고 시리얼번호',
-               '입고 시리얼번호', '비고', 'M/B 수리내역서 작성', '수량', '불량 증상', '구분', '진행상태',
+               '입고 시리얼번호', '비고', 'M/B 수리내역서 작성', 'QR코드번호', '수량', '불량 증상', '구분', '진행상태',
                '반환수량', '미반환수량', '경과일수', '입고처리', '입고일']
     table = [headers]
     for r in rows:
@@ -292,7 +294,7 @@ def xlsx(rows):
                 r['number'], r['date'], r.get('shippedMonth', ''),
                 r.get('courier', ''), r.get('trackingNumber', ''), ' · '.join(r.get('requesters', [])),
                 r['supplier'], r.get('company', ''), item.get('name', ''), item.get('productionMonth', ''),
-                item.get('serial', ''), item.get('receivedSerial', ''), r.get('note', ''), item.get('mbRepairReport', ''), item.get('qty', 1),
+                item.get('serial', ''), item.get('receivedSerial', ''), r.get('note', ''), item.get('mbRepairReport', ''), item.get('qrCodeNumber', ''), item.get('qty', 1),
                 item.get('fault', ''), r['kind'], status_label(r['status']), item['returnedQty'],
                 item['remainingQty'], item['elapsedDays'], item.get('receiptTreatment', ''), item.get('receivedDate', '')])
     def col(i):
@@ -481,13 +483,15 @@ class Handler(BaseHTTPRequestHandler):
                             valid_date(month + '-01')
                         if len(item['name']) > 120:
                             raise ValueError('품명은 120자 이내로 입력하세요.')
+                        if not isinstance(item.get('qrCodeNumber', ''), str) or len(item.get('qrCodeNumber', '')) > 500:
+                            raise ValueError('QR코드번호는 500자 이내로 입력하세요.')
                     if data.get('status') not in ('접수','발송','처리중','부분반환','반환완료'):
                         raise ValueError('진행상태가 올바르지 않습니다.')
                     result = dict(old or {})
                     keys = ('date','supplier','phone','company','companyPhone','manager','kind','status','note','shippedDate','trackingNumber','courier')
                     result.update({k: data[k] for k in keys if k in data})
                     result['requesters'] = [name for name in ('GN','대일') if name in requesters]
-                    result['items'] = [{k:v for k,v in item.items() if k in ('name','serial','qty','fault','productionMonth')} for item in items]
+                    result['items'] = [{k:v for k,v in item.items() if k in ('name','serial','qty','fault','productionMonth','qrCodeNumber')} for item in items]
                     result['returns'] = editor_returns(old, data, items, c) if old else []
                     result['version'] = old['version'] + 1 if old else 0
                     if not result['returns'] and result['status'] in ('부분반환', '반환완료'):
@@ -509,8 +513,76 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(dict(result, id=id))
         except (ValueError,TypeError,KeyError,AttributeError) as e: return self.send({'error':str(e)},status=400)
 
-if __name__=='__main__':
+def windows_browser_command(url):
+    import winreg
+    browsers = ['msedge.exe', 'chrome.exe', 'firefox.exe']
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice') as key:
+            selected = winreg.QueryValueEx(key, 'ProgId')[0].lower()
+        preferred = next((name for prefix,name in [('chrome','chrome.exe'),('firefox','firefox.exe'),('msedge','msedge.exe')]
+                          if selected.startswith(prefix)), None)
+        if preferred:
+            browsers.remove(preferred); browsers.insert(0, preferred)
+    except OSError:
+        pass
+    locations = {
+        'msedge.exe': r'Microsoft\Edge\Application\msedge.exe',
+        'chrome.exe': r'Google\Chrome\Application\chrome.exe',
+        'firefox.exe': r'Mozilla Firefox\firefox.exe'
+    }
+    for name in browsers:
+        candidates = []
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(root, r'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths' + '\\' + name) as key:
+                    candidates.append(winreg.QueryValueEx(key, None)[0])
+            except OSError:
+                pass
+        candidates.extend(os.path.join(os.environ[folder], locations[name])
+                          for folder in ('PROGRAMFILES','PROGRAMFILES(X86)','LOCALAPPDATA') if os.environ.get(folder))
+        for candidate in candidates:
+            executable = os.path.expandvars(candidate).strip().strip('"')
+            if os.path.isfile(executable):
+                return [executable, '-new-window' if name == 'firefox.exe' else '--new-window', url]
+    return None
+
+
+def open_program_window(url):
+    if sys.platform == 'win32':
+        command = windows_browser_command(url)
+        if command:
+            subprocess.Popen(command)
+            return
+    webbrowser.open(url, new=1)
+
+
+def existing_program(url):
+    try:
+        with urlopen(url, timeout=2) as response:
+            return '<title>부품 AS · 전표 관리</title>'.encode() in response.read(4096)
+    except OSError:
+        return False
+
+
+def main():
     host = os.environ.get('AS_HOST', '127.0.0.1')
     port = int(os.environ.get('PORT', '8000'))
     print(f'AS 전표 관리: http://{host}:{port}', flush=True)
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    try:
+        server = ThreadingHTTPServer((host, port), Handler)
+    except OSError:
+        url = f'http://127.0.0.1:{port}'
+        if '--open-browser' in sys.argv and existing_program(url):
+            open_program_window(url)
+            return
+        raise
+    if '--open-browser' in sys.argv:
+        try:
+            open_program_window(f'http://127.0.0.1:{server.server_port}')
+        except OSError as error:
+            print(f'Browser could not be opened: {error}', flush=True)
+    server.serve_forever()
+
+
+if __name__=='__main__':
+    main()

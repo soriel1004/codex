@@ -142,7 +142,7 @@ function itemRow(i = {}) {
   tr.dataset.rowKey = 'editor-item-' + (++editorRowSequence);
   tr.dataset.sourceIndex = Number.isInteger(i.sourceIndex) ? i.sourceIndex : '';
   tr.innerHTML = `<td><input data-key="name" aria-label="품명" list="productNames" maxlength="120" placeholder="목록에서 선택 또는 직접 입력" value="${esc(i.name||'')}" required></td>` +
-    ['productionMonth','serial','qty','fault'].map(k => `<td><input data-key="${k}" aria-label="${({productionMonth:'생산 년월',serial:'출고 시리얼번호',qty:'수량',fault:'불량 증상'})[k]}" ${k==='productionMonth'?'type="month"':k==='qty'?'type="number" min="1" max="99999" required':'maxlength="'+(k==='fault'?70:40)+'"'} value="${esc(i[k]??(k==='qty'?1:''))}"></td>`).join('') +
+    ['productionMonth','serial','qrCodeNumber','qty','fault'].map(k => `<td data-cell="${k}" ${k==='qrCodeNumber'?'data-gn-qr hidden':''}><input data-key="${k}" aria-label="${({productionMonth:'생산 년월',serial:'출고 시리얼번호',qrCodeNumber:'QR코드번호',qty:'수량',fault:'불량 증상'})[k]}" ${['serial','qrCodeNumber'].includes(k)?'autocomplete="off" spellcheck="false" enterkeyhint="next"':''} ${k==='productionMonth'?'type="month"':k==='qty'?'type="number" min="1" max="99999" required':'maxlength="'+(k==='qrCodeNumber'?500:k==='fault'?70:40)+'"'} value="${esc(i[k]??(k==='qty'?1:''))}"></td>`).join('') +
     '<td><button type="button" class="remove" aria-label="품목 삭제">×</button></td>';
   tr.querySelector('.remove').onclick = () => {
     if ($('#items').children.length > 1) {
@@ -151,6 +151,7 @@ function itemRow(i = {}) {
     } else toast('품목은 최소 1개가 필요합니다.');
   };
   $('#items').append(tr);
+  updateGnQrColumns();
   if (editing) addEditorReceiptCard(tr, i);
   tr.querySelector('[data-key=name]').oninput = () => {
     const card = $('#editorReceiptSerialRows').querySelector(`[data-row-key="${tr.dataset.rowKey}"]`);
@@ -158,6 +159,30 @@ function itemRow(i = {}) {
   };
   tr.querySelector('[data-key=qty]').oninput = syncEditorStatus;
 }
+function updateGnQrColumns() {
+  const enabled = $('#slipForm [name=requesters][value=GN]').checked;
+  $('#slipForm').querySelectorAll('[data-gn-qr]').forEach(cell => { cell.hidden = !enabled; });
+  $('#slipForm .item-table').classList.toggle('has-gn-qr', enabled);
+  $('#editor').classList.toggle('gn-editor', enabled);
+}
+$('#slipForm [name=requesters][value=GN]').addEventListener('change', updateGnQrColumns);
+let lastScannerTerminator = -Infinity;
+$('#slipForm').addEventListener('input', () => { lastScannerTerminator = -Infinity; });
+$('#slipForm').addEventListener('keydown', e => {
+  if (e.isComposing || !(e.target instanceof HTMLInputElement)) return;
+  const input = e.target, scannerField = ['serial','qrCodeNumber'].includes(input.dataset.key);
+  if (!scannerField && input.dataset.key !== 'qty') return;
+  const scanTab = e.key === 'Tab' && scannerField && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
+  if (e.key !== 'Enter' && !scanTab) return;
+  if (['checkbox','radio','submit','button'].includes(input.type)) return;
+  // A scanner terminator must never implicitly save the slip, even after focus moves.
+  e.preventDefault();
+  if (!scannerField || e.repeat || e.timeStamp - lastScannerTerminator < 100) return;
+  lastScannerTerminator = e.timeStamp;
+  const nextKey = input.dataset.key === 'serial' && $('#slipForm [name=requesters][value=GN]').checked ? 'qrCodeNumber' : 'qty';
+  const next = input.closest('tr').querySelector(`[data-key=${nextKey}]`);
+  next.focus(); next.select();
+});
 function showShippedMonth() {
   const date = $('#receiptDate').value;
   $('#shippedMonth').textContent = date ? Number(date.slice(5,7)) + '월' : '—월';
@@ -221,6 +246,7 @@ function openEditor(s = null) {
   for (const [k,v] of Object.entries(source)) if (k !== 'requesters' && f.elements.namedItem(k)) f.elements.namedItem(k).value=v;
   f.querySelectorAll('[name=requesters]').forEach(c=>c.checked=Boolean(s?.requesters.includes(c.value)));
   if (s) s.items.forEach(itemRow); else {f.elements.date.value=today(); itemRow();}
+  updateGnQrColumns(); lastScannerTerminator = -Infinity;
   f.elements.status.value = s ? s.status : '발송';
   showShippedMonth();
   $('#editorReceiptSerials').hidden = !s;
