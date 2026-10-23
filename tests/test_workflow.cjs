@@ -171,6 +171,73 @@ const {spawn, execFileSync} = require('node:child_process');
     // Simulated saved slips exercise tracking without contacting any carrier.
     const trackingFixture=await (await page.request.get(`http://127.0.0.1:${port}/api/slips`)).json();
     const trackingRoute=`http://127.0.0.1:${port}/api/slips`;
+    // Search all saved fields, including hidden later items and receipt history.
+    // Distinct slips ensure a match in the wrong field cannot pass unnoticed.
+    const searchBase=trackingFixture[0];
+    const searchSlips=[
+      {...searchBase, status:'부분반환', note:'전원 점검 요청',
+        items:searchBase.items.map((item,i)=>({...item, serial:i?'SECOND-OUT-007':'AB-001 234', receivedSerial:i?'':'NEW-IN-0099\nEXTRA-IN-0010'})),
+        returns:[{date:'2026-10-20',result:'교환 입고',mbRepairReport:'전원부 교체 후 정상',items:[{index:0,qty:1,receivedSerial:'HIST-IN-0008'}]}]},
+      {...searchBase,id:9992,number:'261020-02',supplier:'다른 업체',phone:'010-5555-6666',requesters:['대일'],trackingNumber:'9988-7766',
+        items:[{...searchBase.items[0],name:'테스트 GPU',serial:'AB-999999',qrCodeNumber:'ALT-QR-0002'}],returns:[]},
+      {...searchBase,id:9993,number:'261001-03',supplier:'완료 업체',phone:'010-7777-8888',status:'반환완료',returned:'2026-10-21',requesters:[],
+        items:[{...searchBase.items[0],name:'완료 메인보드',serial:'OLD-0001',receivedSerial:'REPLACED-0002',returnedQty:2,remainingQty:0}],
+        returns:[{date:'2026-10-21',result:'수리 입고',items:[{index:0,qty:2,receivedSerial:'REPLACED-0002'}]}]}
+    ];
+    await page.route(trackingRoute,route=>route.fulfill({json:searchSlips}));
+    await page.reload();
+    await page.locator('#rows [data-edit]').first().waitFor();
+    async function checkSearch(field,query,numbers) {
+      await page.locator('#searchField').selectOption(field);
+      await page.locator('#search').fill(query);
+      assert.deepEqual(await page.locator('#rows td:first-child strong').allTextContents(),numbers,`${field}: ${query}`);
+      assert.equal(await page.locator('#count').innerText(),numbers.length+'건');
+    }
+    for (const [field,query] of [
+      ['all','ab001234'],['serial','ａｂ００１２３４'],['outboundSerial','secondout007'],
+      ['receivedSerial','histin0008'],['receivedSerial','newin0099'],['receivedSerial','extrain0010'],['trackingNumber','0000-123 456789'],
+      ['supplier','받는업체'],['name','임시 제품'],['qrCodeNumber','000secondqr'],['number','26101901'],
+      ['details','전원부 교체'],['all','받는업체 gpu secondout007'],['all','교환입고'],['all','부분완료'],['all','021234567']
+    ]) await checkSearch(field,query,['261019-01']);
+    for (const [field,query] of [
+      ['outboundSerial','newin0099'],['receivedSerial','ab001234'],['supplier','GPU'],
+      ['qrCodeNumber','secondout007'],['all','받는업체 999999'],['all','trackingNumber'],
+      ['all','sourceIndex'],['all','9992'],['all','::::'],['all','---'],['serial','0099extrain']
+    ]) await checkSearch(field,query,[]);
+    assert.equal(await page.locator('#empty h3').innerText(),'검색 결과가 없습니다');
+    await checkSearch('all','   ',['261019-01','261020-02']);
+    await checkSearch('trackingNumber','99887766',['261020-02']);
+    await checkSearch('all','ab001234',['261019-01']);
+    await page.locator('#search').press('Enter');
+    assert.equal(await page.locator('#editor').isVisible(),false);
+    await page.locator('#requesterFilter').selectOption('대일');
+    assert.equal(await page.locator('#rows tr').count(),0);
+    await page.locator('#statusFilter').selectOption('발송');
+    await page.locator('#resetSearch').click();
+    assert.equal(await page.locator('#searchField').inputValue(),'all');
+    assert.equal(await page.locator('#requesterFilter').inputValue(),'');
+    assert.equal(await page.locator('#statusFilter').inputValue(),'');
+    assert.equal(await page.locator('#search').inputValue(),'');
+    assert.equal(await page.locator('#rows tr').count(),2);
+    await page.locator('#statusFilter').selectOption('부분반환');
+    await checkSearch('all','001234',['261019-01']);
+    await page.locator('#resetSearch').click();
+    await checkSearch('receivedSerial','replaced0002',[]);
+    await page.locator('[data-view=completed]').click();
+    await checkSearch('receivedSerial','replaced0002',['261001-03']);
+    await page.locator('#resetSearch').click();
+    assert.equal(await page.locator('[data-view=completed]').getAttribute('class'),'active');
+    assert.equal(await page.locator('#rows tr').count(),1);
+    await page.locator('[data-view=all]').click();
+    await checkSearch('all','',searchSlips.map(s=>s.number));
+    await page.setViewportSize({width:390,height:844});
+    for (const selector of ['#searchField','#search','#resetSearch']) {
+      const bounds=await page.locator(selector).boundingBox();
+      assert.ok(bounds.x>=0 && bounds.x+bounds.width<=390,`${selector} fits narrow screens`);
+    }
+    await page.setViewportSize({width:1600,height:1100});
+    await page.unroute(trackingRoute);
+    await page.reload(); await page.locator('#rows [data-edit]').waitFor();
     async function showTracking(courier, trackingNumber) {
       await page.unroute(trackingRoute);
       await page.route(trackingRoute,route=>route.fulfill({json:[{...trackingFixture[0],courier,trackingNumber}]}));
@@ -474,7 +541,7 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.waitForFunction(()=>document.querySelector('#count').textContent==='0건');
     assert.deepEqual(await (await page.request.get(trackingRoute)).json(),[]);
     assert.deepEqual(errors,[]);
-    console.log('PASS: active/completed deletion, cancellation and Excel exclusion; completed serial change indicators, unchanged/missing/reordered serials, multiple products and escaped text; five-carrier tracking, completed-slip editing, returns, elapsed days and print.');
+    console.log('PASS: field-specific and combined search, normalized identifiers, later items and receipt history, filters/reset and narrow screens; active/completed deletion, cancellation and Excel exclusion; completed serial change indicators, unchanged/missing/reordered serials, multiple products and escaped text; five-carrier tracking, completed-slip editing, returns, elapsed days and print.');
   } finally {
     if(browser) await browser.close();
     server.kill();

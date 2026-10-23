@@ -103,10 +103,42 @@ $('#deleteForm').onsubmit = async e => {
   finally { button.disabled = false; }
 };
 $('#deleteDialog').addEventListener('close', () => { deleting = null; });
+const searchIndex = new WeakMap();
+const searchText = value => String(value ?? '').normalize('NFKC').toLowerCase();
+const compactSearchText = value => value.replace(/[\s\p{Dash_Punctuation}\u2212]+/gu, '');
+function searchableSlip(s) {
+  if (searchIndex.has(s)) return searchIndex.get(s);
+  const events = s.returns || [];
+  const serialValues = values => values.flatMap(value => String(value ?? '').split(/[,，\r\n]+/));
+  const fields = {
+    number: [s.number], supplier: [s.supplier], trackingNumber: [s.trackingNumber],
+    name: s.items.map(i => i.name), qrCodeNumber: s.items.map(i => i.qrCodeNumber),
+    outboundSerial: serialValues(s.items.map(i => i.serial)),
+    receivedSerial: serialValues([...s.items.map(i => i.receivedSerial), ...events.flatMap(e => (e.items || []).map(i => i.receivedSerial))]),
+    details: [s.note, s.result, ...s.items.flatMap(i => [i.fault, i.receiptTreatment, i.mbRepairReport]), ...events.flatMap(e => [e.result, e.mbRepairReport])],
+    other: [s.date, s.shippedMonth, s.courier, s.phone, s.company, s.companyPhone, s.manager, s.kind, statusLabel(s.status), s.returned,
+      ...(s.requesters || []), ...s.items.flatMap(i => [i.productionMonth, i.receivedDate]), ...events.map(e => e.date)]
+  };
+  fields.all = Object.values(fields).flat();
+  fields.serial = [...fields.outboundSerial, ...fields.receivedSerial];
+  const index = Object.fromEntries(Object.entries(fields).map(([key, values]) => [key, values.filter(v => v != null && v !== '').map(value => {
+    const text = searchText(value);
+    return {text, compact:compactSearchText(text)};
+  })]));
+  searchIndex.set(s, index);
+  return index;
+}
+function matchesSearch(s, terms, field) {
+  if (!terms.length) return true;
+  const values = searchableSlip(s)[field] || [];
+  return terms.every(term => values.some(value => value.text.includes(term.text) || (term.compact && value.compact.includes(term.compact))));
+}
 function render() {
-  const q = $('#search').value.trim().toLowerCase(), status = $('#statusFilter').value;
+  const q = searchText($('#search').value).trim(), status = $('#statusFilter').value;
+  const terms = q ? q.split(/\s+/u).map(text => ({text, compact:compactSearchText(text)})) : [];
+  const field = $('#searchField').value;
   const requester = $('#requesterFilter').value;
-  const filtered = slips.filter(s => (!requester || (requester === 'none' ? !s.requesters.length : s.requesters.includes(requester))) && (view === 'all' || (s.status === '반환완료') === (view === 'completed')) && (!status || s.status === status) && (JSON.stringify(s).toLowerCase().includes(q) || statusLabel(s.status).includes(q)));
+  const filtered = slips.filter(s => (!requester || (requester === 'none' ? !s.requesters.length : s.requesters.includes(requester))) && (view === 'all' || (s.status === '반환완료') === (view === 'completed')) && (!status || s.status === status) && matchesSearch(s, terms, field));
   $('#count').textContent = filtered.length + '건';
   document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   $('#stats').innerHTML = [
@@ -117,8 +149,9 @@ function render() {
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
   $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${slipActions(s)}</td></tr>`).join('');
   $('#empty').hidden = filtered.length > 0;
-  $('#empty h3').textContent = view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
-  $('#empty p').textContent = view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
+  const hasFilters = Boolean(q || requester || status);
+  $('#empty h3').textContent = hasFilters ? '검색 결과가 없습니다' : view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
+  $('#empty p').textContent = hasFilters ? '검색 대상과 검색어를 확인하거나 초기화를 누르세요. 진행·완료 건을 함께 찾으려면 전체 목록을 선택하세요.' : view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
 }
 async function reload() { slips = await api('/api/slips'); render(); }
 function supplierOptions(selected = '') {
@@ -472,7 +505,18 @@ document.addEventListener('click', async e => {
     for (const [k,v] of Object.entries(supplier)) if ($('#supplierForm').elements.namedItem(k)) $('#supplierForm').elements.namedItem(k).value = v;
   }
 });
-$('#search').oninput = render; $('#statusFilter').onchange = render; $('#requesterFilter').onchange = render;
+$('#search').oninput = render;
+$('#searchField').onchange = render;
+$('#statusFilter').onchange = render;
+$('#requesterFilter').onchange = render;
+$('#resetSearch').onclick = () => {
+  $('#search').value = '';
+  $('#searchField').value = 'all';
+  $('#statusFilter').value = '';
+  $('#requesterFilter').value = '';
+  render();
+  $('#search').focus();
+};
 // Use the same physical half-sheet dimensions for the proof and printed copies.
 function fitSlips(root) {
   root.querySelectorAll('.slip').forEach(slip => {

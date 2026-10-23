@@ -120,3 +120,6 @@ header{min-height:83px;height:auto;gap:12px;flex-wrap:wrap;padding-top:15px;padd
 #editor.gn-editor{width:min(1240px,96vw)}.item-table.has-gn-qr{min-width:1080px}.item-table [data-key=serial]{min-width:140px}.item-table [data-key=qrCodeNumber]{min-width:180px}
 
 .heading-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.app-version{font-size:12px;font-weight:bold;color:#5375ae;background:#e9effa;border:1px solid #d6e1f2;border-radius:6px;padding:5px 8px;white-space:nowrap}
+
+.slip-search{padding:0 22px 18px}.slip-search-controls{display:flex;gap:8px;align-items:center}.slip-search-controls select{flex:0 1 220px;min-width:0}.slip-search-controls input{flex:1;min-width:0}.slip-search-controls button{flex:none}#searchHelp{font-size:12px;line-height:1.7;color:#627189;margin:10px 0 0;overflow-wrap:anywhere}
+@media screen and (max-width:600px){.slip-search-controls{flex-wrap:wrap}.slip-search-controls select{flex-basis:100%}.slip-search-controls input{width:0}.slip-search{padding:0 18px 18px}}
