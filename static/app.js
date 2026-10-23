@@ -151,7 +151,7 @@ function render() {
   $('#empty').hidden = filtered.length > 0;
   const hasFilters = Boolean(q || requester || status);
   $('#empty h3').textContent = hasFilters ? '검색 결과가 없습니다' : view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
-  $('#empty p').textContent = hasFilters ? '검색 대상과 검색어를 확인하거나 초기화를 누르세요. 진행·완료 건을 함께 찾으려면 전체 목록을 선택하세요.' : view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
+  $('#empty p').textContent = hasFilters ? '검색 대상·검색어·필터를 확인하거나 초기화를 누르세요.' : view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
 }
 async function reload() { slips = await api('/api/slips'); render(); }
 function supplierOptions(selected = '') {
@@ -505,7 +505,13 @@ document.addEventListener('click', async e => {
     for (const [k,v] of Object.entries(supplier)) if ($('#supplierForm').elements.namedItem(k)) $('#supplierForm').elements.namedItem(k).value = v;
   }
 });
-$('#search').oninput = render;
+$('#search').oninput = () => {
+  if ($('#search').value.trim() && view !== 'all') {
+    view = 'all';
+    $('#statusFilter').value = '';
+  }
+  render();
+};
 $('#searchField').onchange = render;
 $('#statusFilter').onchange = render;
 $('#requesterFilter').onchange = render;

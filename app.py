@@ -9,7 +9,7 @@ from xml.sax.saxutils import escape
 from excel_report import add_as_report
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '1.2.0'
+APP_VERSION = '1.2.1'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DATA.mkdir(parents=True, exist_ok=True)
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')

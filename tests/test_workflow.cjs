@@ -180,8 +180,8 @@ const {spawn, execFileSync} = require('node:child_process');
         returns:[{date:'2026-10-20',result:'교환 입고',mbRepairReport:'전원부 교체 후 정상',items:[{index:0,qty:1,receivedSerial:'HIST-IN-0008'}]}]},
       {...searchBase,id:9992,number:'261020-02',supplier:'다른 업체',phone:'010-5555-6666',requesters:['대일'],trackingNumber:'9988-7766',
         items:[{...searchBase.items[0],name:'테스트 GPU',serial:'AB-999999',qrCodeNumber:'ALT-QR-0002'}],returns:[]},
-      {...searchBase,id:9993,number:'261001-03',supplier:'완료 업체',phone:'010-7777-8888',status:'반환완료',returned:'2026-10-21',requesters:[],
-        items:[{...searchBase.items[0],name:'완료 메인보드',serial:'OLD-0001',receivedSerial:'REPLACED-0002',returnedQty:2,remainingQty:0}],
+      {...searchBase,id:9993,number:'261001-03',supplier:'완료 업체',phone:'010-7777-8888',trackingNumber:'1122-3344',status:'반환완료',returned:'2026-10-21',requesters:[],
+        items:[{...searchBase.items[0],name:'완료 메인보드',serial:'OLD-0001',qrCodeNumber:'COMPLETED-QR-0003',receivedSerial:'REPLACED-0002',returnedQty:2,remainingQty:0}],
         returns:[{date:'2026-10-21',result:'수리 입고',items:[{index:0,qty:2,receivedSerial:'REPLACED-0002'}]}]}
     ];
     await page.route(trackingRoute,route=>route.fulfill({json:searchSlips}));
@@ -193,6 +193,17 @@ const {spawn, execFileSync} = require('node:child_process');
       assert.deepEqual(await page.locator('#rows td:first-child strong').allTextContents(),numbers,`${field}: ${query}`);
       assert.equal(await page.locator('#count').innerText(),numbers.length+'건');
     }
+    await page.locator('#statusFilter').selectOption('부분반환');
+    await checkSearch('receivedSerial','replaced0002',['261001-03']);
+    assert.equal(await page.locator('[data-view=all]').getAttribute('class'),'active');
+    assert.equal(await page.locator('#statusFilter').inputValue(),'');
+    await page.locator('#rows [data-edit]').click();
+    await page.locator('[data-close=editor]').last().click();
+    assert.equal(await page.locator('[data-view=all]').getAttribute('class'),'active');
+    assert.equal(await page.locator('#search').inputValue(),'replaced0002');
+    await page.locator('[data-view=completed]').click();
+    await checkSearch('outboundSerial','secondout007',['261019-01']);
+    assert.equal(await page.locator('[data-view=all]').getAttribute('class'),'active');
     for (const [field,query] of [
       ['all','ab001234'],['serial','ａｂ００１２３４'],['outboundSerial','secondout007'],
       ['receivedSerial','histin0008'],['receivedSerial','newin0099'],['receivedSerial','extrain0010'],['trackingNumber','0000-123 456789'],
@@ -205,7 +216,7 @@ const {spawn, execFileSync} = require('node:child_process');
       ['all','sourceIndex'],['all','9992'],['all','::::'],['all','---'],['serial','0099extrain']
     ]) await checkSearch(field,query,[]);
     assert.equal(await page.locator('#empty h3').innerText(),'검색 결과가 없습니다');
-    await checkSearch('all','   ',['261019-01','261020-02']);
+    await checkSearch('all','   ',searchSlips.map(s=>s.number));
     await checkSearch('trackingNumber','99887766',['261020-02']);
     await checkSearch('all','ab001234',['261019-01']);
     await page.locator('#search').press('Enter');
@@ -218,16 +229,19 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.equal(await page.locator('#requesterFilter').inputValue(),'');
     assert.equal(await page.locator('#statusFilter').inputValue(),'');
     assert.equal(await page.locator('#search').inputValue(),'');
-    assert.equal(await page.locator('#rows tr').count(),2);
+    assert.equal(await page.locator('#rows tr').count(),3);
     await page.locator('#statusFilter').selectOption('부분반환');
     await checkSearch('all','001234',['261019-01']);
     await page.locator('#resetSearch').click();
-    await checkSearch('receivedSerial','replaced0002',[]);
-    await page.locator('[data-view=completed]').click();
+    await page.locator('[data-view=active]').click();
     await checkSearch('receivedSerial','replaced0002',['261001-03']);
+    await page.locator('[data-view=completed]').click();
+    assert.deepEqual(await page.locator('#rows td:first-child strong').allTextContents(),['261001-03']);
     await page.locator('#resetSearch').click();
     assert.equal(await page.locator('[data-view=completed]').getAttribute('class'),'active');
     assert.equal(await page.locator('#rows tr').count(),1);
+    await checkSearch('all','   ',['261001-03']);
+    assert.equal(await page.locator('[data-view=completed]').getAttribute('class'),'active');
     await page.locator('[data-view=all]').click();
     await checkSearch('all','',searchSlips.map(s=>s.number));
     await page.setViewportSize({width:390,height:844});
@@ -392,6 +406,7 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.locator('[data-close=returnDialog]').last().click();
     current=await (await page.request.get(`http://127.0.0.1:${port}/api/slips`)).json();
     assert.equal(current[0].returns.length,1);
+    await page.locator('#search').fill('26101901');
     await page.locator('#rows [data-return-all]').click();
     await page.setViewportSize({width:390,height:844});
     const incoming=page.locator('#returnItems tr').first().locator('textarea');
@@ -407,6 +422,10 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.locator('#returnForm [name=result]').selectOption('수리');
     await page.locator('#returnSave').click();
     await page.setViewportSize({width:1600,height:1100});
+    await page.locator('#rows .badge').filter({hasText:/^완료$/}).waitFor();
+    assert.equal(await page.locator('[data-view=all]').getAttribute('class'),'active');
+    assert.equal(await page.locator('#search').inputValue(),'26101901');
+    await page.locator('#search').fill('');
     await page.locator('[data-view=completed]').click();
     await page.locator('#rows .badge').filter({hasText:'완료'}).waitFor();
     const serialChanges=page.locator('#rows .serial-changes');
