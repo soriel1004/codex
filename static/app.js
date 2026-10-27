@@ -615,6 +615,8 @@ $('#printBtn').onclick = async () => {
   if (preparePrint()) window.print();
 };
 (async () => {
-  try { settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); products = await api('/api/products'); receiptOptions = await api('/api/receipt-options'); await reload(); }
+  try { settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); products = await api('/api/products'); receiptOptions = await api('/api/receipt-options'); await reload();
+    const health = await api('/api/health');
+    if (health.server_pc) { $('#serverInfo').textContent = '자동 서버 · ' + health.server_pc; $('#serverInfo').hidden = false; } }
   catch (e) { toast('서버 연결 오류: ' + e.message); }
 })();

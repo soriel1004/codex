@@ -10,7 +10,7 @@ from excel_report import add_as_report
 import storage
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '2.0.0'
+APP_VERSION = '3.0.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
@@ -319,6 +319,15 @@ def xlsx(rows):
     return add_as_report(out.getvalue(), rows, korea_today(), APP_VERSION)
 
 class Handler(BaseHTTPRequestHandler):
+    def check_shared_server(self):
+        if storage.active_sync is not None:
+            coordinator = storage.active_sync
+            with coordinator.mutex:
+                coordinator.assert_owner()
+                if (coordinator.shared/'transactions'/f'{coordinator.sequence+1:020d}.json').exists():
+                    coordinator.failed = True
+                    raise storage.SharedStoreError('이 서버보다 최신 NAS 저장 기록이 있습니다. 프로그램을 재실행해 이어받으세요.')
+
     def send(self, body, content='application/json; charset=utf-8', status=200):
         if not isinstance(body,bytes): body=json.dumps(body,ensure_ascii=False).encode()
         self.send_response(status); self.send_header('Content-Type',content)
@@ -327,7 +336,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(body)
     def do_GET(self):
         try:
+            if urlparse(self.path).path.startswith('/api/'):
+                self.check_shared_server()
             self.get_response()
+        except storage.SharedStoreError as error:
+            self.send({'error':str(error)},status=503)
         except (ValueError,TypeError) as error:
             self.send({'error':str(error)},status=400)
         except sqlite3.OperationalError as error:
@@ -366,7 +379,11 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 backup.unlink(missing_ok=True)
             return
-        if path=='/api/health': return self.send({'ok':True,'version':APP_VERSION,'instance':data_instance()})
+        if path=='/api/health':
+            health = {'ok':True,'version':APP_VERSION,'instance':data_instance()}
+            if storage.active_sync is not None:
+                health.update(share_id=storage.active_sync.identity['share_id'],leader_token=storage.active_sync.token,server_pc=storage.active_sync.owner('ready')['pc'])
+            return self.send(health)
         if path=='/api/slips': return self.send(records())
         if path=='/api/receipt-options': return self.send([row['name'] for row in receipt_option_rows()])
         if path=='/api/receipt-options/manage': return self.send(receipt_option_rows())
@@ -385,6 +402,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(body, {'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}[file.suffix[1:]])
     def do_POST(self):
         try:
+            self.check_shared_server()
             origin = self.headers.get('Origin')
             if origin and urlparse(origin).netloc.casefold() != self.headers.get('Host','').casefold():
                 return self.send({'error':'프로그램을 연 서버 주소에서만 저장할 수 있습니다.'},status=403)
@@ -545,6 +563,7 @@ class Handler(BaseHTTPRequestHandler):
                 result.pop('id', None)
                 storage.save_record(c, id, result)
             return self.send(dict(result, id=id))
+        except storage.SharedStoreError as error: return self.send({'error':str(error)},status=503)
         except (ValueError,TypeError,KeyError,AttributeError) as e: return self.send({'error':str(e)},status=400)
         except sqlite3.OperationalError as error: return self.database_error(error)
 
@@ -640,13 +659,13 @@ def start_backup_worker():
     return stop, thread
 
 
-def main():
+def main(prepared_server=None, on_ready=None, open_browser=None):
     storage.require_local(DATA)
     host = os.environ.get('AS_HOST', '127.0.0.1')
     port = int(os.environ.get('PORT', '8000'))
     print(f'AS 전표 관리 V{APP_VERSION}: http://{host}:{port}', flush=True)
     try:
-        server = ThreadingHTTPServer((host, port), Handler)
+        server = prepared_server or ThreadingHTTPServer((host, port), Handler)
     except OSError:
         url = f'http://127.0.0.1:{port}'
         if '--open-browser' in sys.argv and existing_program(url):
@@ -658,7 +677,8 @@ def main():
             with db(): pass
             stop, worker = start_backup_worker()
             try:
-                if '--open-browser' in sys.argv:
+                if on_ready: on_ready(server.server_port)
+                if open_browser is True or (open_browser is None and '--open-browser' in sys.argv):
                     try:
                         open_program_window(f'http://127.0.0.1:{server.server_port}')
                     except OSError as error:

@@ -14,6 +14,11 @@ from pathlib import Path
 _initialised = {}
 _schema_lock = threading.RLock()
 SCHEMA_VERSION = 200
+active_sync = None
+
+
+class SharedStoreError(RuntimeError):
+    """A shared durable commit could not be completed safely."""
 
 
 def is_network_path(path):
@@ -42,9 +47,24 @@ def readonly_uri(path):
 
 
 class Connection(sqlite3.Connection):
+    sync = None
+
+    def commit(self):
+        if self.sync is not None and self.in_transaction:
+            return self.sync.commit(self, super().commit)
+        return super().commit()
+
     def __exit__(self, *args):
         try:
-            return super().__exit__(*args)
+            if args[0] is None:
+                try:
+                    self.commit()
+                except BaseException:
+                    self.rollback()
+                    raise
+            else:
+                self.rollback()
+            return False
         finally:
             self.close()
 
@@ -202,6 +222,8 @@ def connect(data, normalise):
             for slip_id, body in c.execute('SELECT id,body FROM slips WHERE indexed=0').fetchall():
                 save_record(c, slip_id, normalise(json.loads(body)))
             c.commit()
+        if active_sync is not None and active_sync.data.resolve() == data:
+            active_sync.attach(c)
         return c
     except BaseException:
         c.close()
@@ -272,7 +294,10 @@ class ServerLock:
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.file = self.path.open('a+b')
+        try:
+            self.file = self.path.open('x+b')
+        except FileExistsError:
+            self.file = self.path.open('r+b')
         try:
             if os.name == 'nt':
                 import msvcrt

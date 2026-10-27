@@ -8,15 +8,17 @@ const {spawn}=require('node:child_process');
 
 (async()=>{
   const temp=fs.mkdtempSync(path.join(os.tmpdir(),'as-network-'));
-  const server=spawn(process.env.PYTHON_COMMAND||'python3',['-u','-c',
-    "import app; s=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler); print(s.server_port,flush=True); s.serve_forever()"],
-    {cwd:path.resolve(__dirname,'..'),env:{...process.env,AS_DATA_DIR:temp},stdio:['ignore','pipe','inherit']});
+  const script=process.env.AS_TEST_AUTO==='1'
+    ? "import app,auto_server,os; from pathlib import Path; c=auto_server.SharedServer(Path(os.environ['AS_DATA_DIR'])/'NAS',Path(os.environ['AS_DATA_DIR'])/'PC1'); assert c.claim(); c.prepare(); s=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler); c.activate(); print(s.server_port,flush=True); c.ready(s.server_port); s.serve_forever()"
+    : "import app; s=app.ThreadingHTTPServer(('127.0.0.1',0),app.Handler); print(s.server_port,flush=True); s.serve_forever()";
+  const server=spawn(process.env.PYTHON_COMMAND||'python3',['-u','-c',script],
+    {cwd:path.resolve(__dirname,'..'),env:{...process.env,AS_DATA_DIR:temp,AS_ADVERTISE_HOST:'127.0.0.1'},stdio:['ignore','pipe','inherit']});
   let browser;
   try {
     const port=await new Promise((resolve,reject)=>{
       let output=''; const timer=setTimeout(()=>reject(Error('Startup timeout')),10000);
       server.on('error',error=>{clearTimeout(timer);reject(error);});
-      server.stdout.on('data',chunk=>{output+=chunk;if(/^\d+\n/.test(output)){clearTimeout(timer);resolve(Number(output.trim()));}});
+      server.stdout.on('data',chunk=>{output+=chunk;if(/^\d+\n/.test(output)){clearTimeout(timer);resolve(Number(output.match(/^\d+/)[0]));}});
     });
     browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_PATH?{executablePath:process.env.CHROMIUM_PATH}:{})});
     const contexts=await Promise.all([browser.newContext(),browser.newContext()]);
@@ -35,6 +37,7 @@ const {spawn}=require('node:child_process');
     for(let i=1;i<=57;i++) await post('/api/slips',{date:'2026-10-19',supplier:'공동 사용 업체',company:'우리 업체',kind:'AS 발송',status:'발송',items:[{name:'메인보드',serial:`NETWORK-${String(i).padStart(5,'0')}`,qty:1}]});
     const ready=page=>page.locator('#slipList[aria-busy=false]').waitFor();
     for(const page of pages){await page.goto(origin);await ready(page);}
+    if(process.env.AS_TEST_AUTO==='1') await pages[0].locator('#serverInfo').filter({hasText:'자동 서버'}).waitFor();
     assert.equal(await pages[0].locator('#rows tr').count(),50);
     assert.equal(await pages[0].locator('#count').innerText(),'57건');
     await pages[0].locator('#nextPage').click();await ready(pages[0]);

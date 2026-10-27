@@ -4,3 +4,4 @@ server-config.json
 server-config.json.tmp
 AS-client.url
 backups/
+.as-shared/

@@ -10,6 +10,6 @@ if /i not "%~1"=="--minimized" (
   start "AS Slip Manager" /min "%ComSpec%" /d /c ""%~f0" --minimized"
   exit /b
 )
-py -3 launcher.py --open-browser
+py -3 launcher.py --auto --open-browser
 if errorlevel 1 pause
 popd

@@ -123,6 +123,31 @@ def compact_database(data):
 
 
 def main():
+    if '--auto' in sys.argv or (ROOT/'.as-shared').exists() or storage.is_network_path(ROOT):
+        import auto_server
+        def import_initial(target):
+            config = read_config()
+            if config:
+                # V2's latest data is local to its configured server, not the old NAS copy.
+                if config['server_pc'].casefold() != socket.gethostname().casefold():
+                    raise ValueError('기존 V2 서버 PC('+config['server_pc']+')에 최신 자료가 있습니다. 최초 한 번은 그 PC에서 start-windows.bat를 실행해 이전하세요. 완료 후에는 어느 PC에서 먼저 실행해도 됩니다.')
+                data = server_data(config)
+                with storage.ServerLock(data):
+                    import_legacy(data/'as.db',target)
+            elif (ROOT/'data'/'as.db').is_file():
+                import_legacy(ROOT/'data'/'as.db',target)
+        if '--compact' in sys.argv:
+            coordinator = auto_server.SharedServer(ROOT)
+            if not coordinator.claim():
+                raise ValueError('자동 서버가 실행 중입니다. 서버 커맨드 창을 종료한 뒤 데이터 정리를 실행하세요.')
+            try:
+                coordinator.prepare(import_initial)
+                compact_database(coordinator.data)
+                coordinator.checkpoint(force=True)
+            finally:
+                coordinator.close()
+            return
+        return auto_server.run(ROOT,import_initial)
     if '--setup' in sys.argv:
         return setup()
     config = read_config()
@@ -154,7 +179,7 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ValueError,OSError,sqlite3.Error) as error:
+    except (ValueError,OSError,sqlite3.Error,storage.SharedStoreError) as error:
         print(str(error),file=sys.stderr)
         if os.name == 'nt':
             try:
