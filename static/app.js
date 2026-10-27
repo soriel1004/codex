@@ -1,6 +1,8 @@
 const $ = s => document.querySelector(s);
 let editorRowSequence = 0;
 let slips = [], settings = {}, suppliers = [], products = [], receiptOptions = [], receiptOptionRows = [], editing = null, returning = null, deleting = null, view = 'active';
+let pageNumber = 1, pageSize = 50, pageTotal = 0, pageCount = 1, listStats = {total:0,active:0,completed:0,suppliers:0};
+let listSequence = 0, listAbort = null, listTimer = null;
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
 const total = (s, key) => s.items.reduce((n, i) => n + Number(i[key] || 0), 0);
@@ -103,57 +105,60 @@ $('#deleteForm').onsubmit = async e => {
   finally { button.disabled = false; }
 };
 $('#deleteDialog').addEventListener('close', () => { deleting = null; });
-const searchIndex = new WeakMap();
-const searchText = value => String(value ?? '').normalize('NFKC').toLowerCase();
-const compactSearchText = value => value.replace(/[\s\p{Dash_Punctuation}\u2212]+/gu, '');
-function searchableSlip(s) {
-  if (searchIndex.has(s)) return searchIndex.get(s);
-  const events = s.returns || [];
-  const serialValues = values => values.flatMap(value => String(value ?? '').split(/[,，\r\n]+/));
-  const fields = {
-    number: [s.number], supplier: [s.supplier], trackingNumber: [s.trackingNumber],
-    name: s.items.map(i => i.name), qrCodeNumber: s.items.map(i => i.qrCodeNumber),
-    outboundSerial: serialValues(s.items.map(i => i.serial)),
-    receivedSerial: serialValues([...s.items.map(i => i.receivedSerial), ...events.flatMap(e => (e.items || []).map(i => i.receivedSerial))]),
-    details: [s.note, s.result, ...s.items.flatMap(i => [i.fault, i.receiptTreatment, i.mbRepairReport]), ...events.flatMap(e => [e.result, e.mbRepairReport])],
-    other: [s.date, s.shippedMonth, s.courier, s.phone, s.company, s.companyPhone, s.manager, s.kind, statusLabel(s.status), s.returned,
-      ...(s.requesters || []), ...s.items.flatMap(i => [i.productionMonth, i.receivedDate]), ...events.map(e => e.date)]
-  };
-  fields.all = Object.values(fields).flat();
-  fields.serial = [...fields.outboundSerial, ...fields.receivedSerial];
-  const index = Object.fromEntries(Object.entries(fields).map(([key, values]) => [key, values.filter(v => v != null && v !== '').map(value => {
-    const text = searchText(value);
-    return {text, compact:compactSearchText(text)};
-  })]));
-  searchIndex.set(s, index);
-  return index;
-}
-function matchesSearch(s, terms, field) {
-  if (!terms.length) return true;
-  const values = searchableSlip(s)[field] || [];
-  return terms.every(term => values.some(value => value.text.includes(term.text) || (term.compact && value.compact.includes(term.compact))));
-}
 function render() {
-  const q = searchText($('#search').value).trim(), status = $('#statusFilter').value;
-  const terms = q ? q.split(/\s+/u).map(text => ({text, compact:compactSearchText(text)})) : [];
-  const field = $('#searchField').value;
+  const q = $('#search').value.trim(), status = $('#statusFilter').value;
   const requester = $('#requesterFilter').value;
-  const filtered = slips.filter(s => (!requester || (requester === 'none' ? !s.requesters.length : s.requesters.includes(requester))) && (view === 'all' || (s.status === '반환완료') === (view === 'completed')) && (!status || s.status === status) && matchesSearch(s, terms, field));
-  $('#count').textContent = filtered.length + '건';
+  const filtered = slips;
+  $('#count').textContent = pageTotal + '건';
   document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   $('#stats').innerHTML = [
-    ['전체 전표', slips.length, '누적 접수 내역'],
-    ['진행 중', slips.filter(s => s.status !== '반환완료').length, '부분완료 포함 · 미반환 품목 관리'],
-    ['완료', slips.filter(s => s.status === '반환완료').length, '모든 품목이 반환된 전표'],
-    ['받는이', suppliers.length, '등록된 AS 처리 업체']
+    ['전체 전표', listStats.total, '누적 접수 내역'],
+    ['진행 중', listStats.active, '부분완료 포함 · 미반환 품목 관리'],
+    ['완료', listStats.completed, '모든 품목이 반환된 전표'],
+    ['받는이', listStats.suppliers, '등록된 AS 처리 업체']
   ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
   $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${slipActions(s)}</td></tr>`).join('');
+  $('#pageInfo').textContent = `${pageNumber} / ${pageCount} 페이지 · ${pageTotal}건`;
+  $('#previousPage').disabled = pageNumber <= 1;
+  $('#nextPage').disabled = pageNumber >= pageCount;
   $('#empty').hidden = filtered.length > 0;
   const hasFilters = Boolean(q || requester || status);
   $('#empty h3').textContent = hasFilters ? '검색 결과가 없습니다' : view === 'completed' ? '완료된 전표가 없습니다' : '표시할 전표가 없습니다';
   $('#empty p').textContent = hasFilters ? '검색 대상·검색어·필터를 확인하거나 초기화를 누르세요.' : view === 'completed' ? '모든 품목이 반환되면 완료 목록으로 자동 이동합니다.' : '새 전표를 작성하거나 검색 조건을 확인하세요.';
 }
-async function reload() { slips = await api('/api/slips'); render(); }
+async function reload() {
+  clearTimeout(listTimer);
+  listAbort?.abort();
+  const sequence = ++listSequence;
+  const controller = listAbort = new AbortController();
+  const params = new URLSearchParams({page:pageNumber,size:pageSize,view,q:$('#search').value,field:$('#searchField').value,status:$('#statusFilter').value,requester:$('#requesterFilter').value});
+  $('#slipList').setAttribute('aria-busy','true');
+  $('#listMessage').textContent = '목록을 불러오는 중…';
+  try {
+    const response = await fetch('/api/slips/page?' + params, {signal:controller.signal});
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || '목록을 불러오지 못했습니다.');
+    if (sequence !== listSequence) return;
+    slips = result.rows; pageTotal = result.total; pageNumber = result.page; pageCount = result.pages; listStats = result.stats;
+    render();
+    $('#listMessage').textContent = '목록 갱신: ' + headerTimeFormat.format(new Date());
+  } catch (error) {
+    if (error.name === 'AbortError' || sequence !== listSequence) return;
+    $('#listMessage').textContent = '목록을 갱신하지 못했습니다. 새로고침을 눌러 다시 시도하세요.';
+    throw error;
+  } finally {
+    if (sequence === listSequence) $('#slipList').setAttribute('aria-busy','false');
+  }
+}
+function updateList(delayed = false) {
+  pageNumber = 1;
+  clearTimeout(listTimer);
+  listAbort?.abort();
+  ++listSequence;
+  $('#slipList').setAttribute('aria-busy','true');
+  if (delayed) listTimer = setTimeout(() => reload().catch(error => toast(error.message)), 200);
+  else reload().catch(error => toast(error.message));
+}
 function supplierOptions(selected = '') {
   const names = suppliers.map(s => s.name);
   $('#slipForm [name=supplier]').innerHTML = '<option value="">받는이를 선택하세요</option>' +
@@ -295,7 +300,13 @@ function openEditor(s = null) {
   $('#addItem').disabled=false;
   $('#editor').showModal();
 }
-$('#newBtn').onclick = () => openEditor();
+async function refreshMasters() {
+  const values = await Promise.all(['/api/settings','/api/suppliers','/api/products','/api/receipt-options'].map(path => api(path)));
+  [settings,suppliers,products,receiptOptions] = values;
+}
+$('#newBtn').onclick = async () => {
+  try { await refreshMasters(); openEditor(); } catch (error) { toast(error.message); }
+};
 $('#addItem').onclick = () => $('#items').children.length < 8 ? itemRow() : toast('품목은 최대 8개까지 가능합니다.');
 $('#slipForm').onsubmit = async e => {
   e.preventDefault();
@@ -310,10 +321,11 @@ $('#slipForm').onsubmit = async e => {
   });
   if (!data.company) return toast('먼저 보낸이 설정에서 업체명을 입력하세요.');
   const btn = e.submitter; btn.disabled = true;
-  try { await api('/api/slips', data); $('#editor').close(); await reload(); toast('전표가 저장되었습니다.'); }
+  try { await api('/api/slips', data); if (!editing) pageNumber = 1; $('#editor').close(); await reload(); toast('전표가 저장되었습니다.'); }
   catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };
-$('#settingsBtn').onclick = () => {
+$('#settingsBtn').onclick = async () => {
+  try { settings = await api('/api/settings'); } catch (error) { return toast(error.message); }
   const f = $('#settingsForm'); f.reset();
   for (const [k,v] of Object.entries(settings)) if (f.elements.namedItem(k)) f.elements.namedItem(k).value = v;
   $('#settings').showModal();
@@ -337,7 +349,8 @@ function renderSuppliers() {
     `<tr><td colspan="3">${suppliers.length ? '검색 결과가 없습니다.' : '등록된 받는이가 없습니다. 위에서 등록하세요.'}</td></tr>`;
 }
 $('#supplierSearch').oninput = renderSuppliers;
-$('#suppliersBtn').onclick = () => {
+$('#suppliersBtn').onclick = async () => {
+  try { suppliers = await api('/api/suppliers'); } catch (error) { return toast(error.message); }
   $('#supplierForm').reset(); $('#supplierSearch').value = ''; renderSuppliers(); $('#suppliers').showModal();
 };
 $('#supplierReset').onclick = () => { $('#supplierForm').reset(); $('#supplierForm [name=id]').value = ''; };
@@ -346,7 +359,7 @@ $('#supplierForm').onsubmit = async e => {
   try {
     await api('/api/suppliers', Object.fromEntries(new FormData(e.target)));
     suppliers = await api('/api/suppliers'); e.target.reset(); e.target.elements.id.value = '';
-    renderSuppliers(); render(); toast('받는이를 저장했습니다.');
+    renderSuppliers(); await reload(); toast('받는이를 저장했습니다.');
   } catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };
 function renderProducts() {
@@ -356,7 +369,8 @@ function renderProducts() {
     `<tr><td colspan="2">${products.length ? '검색 결과가 없습니다.' : '등록된 품명이 없습니다. 위에서 추가하세요.'}</td></tr>`;
 }
 $('#productSearch').oninput = renderProducts;
-function openProducts() {
+async function openProducts() {
+  try { products = await api('/api/products'); } catch (error) { return toast(error.message); }
   $('#productForm').reset(); $('#productSearch').value = ''; renderProducts(); $('#products').showModal();
 }
 $('#productsBtn').onclick = openProducts;
@@ -489,13 +503,20 @@ document.addEventListener('click', async e => {
     } catch (err) { toast(err.message); b.disabled = false; }
   }
   if (b.dataset.close) $('#'+b.dataset.close).close();
-  if (b.dataset.view) { view = b.dataset.view; $('#statusFilter').value = ''; render(); }
-  if (b.dataset.edit) openEditor(slips.find(s => s.id === Number(b.dataset.edit)));
+  if (b.dataset.view) { view = b.dataset.view; $('#statusFilter').value = ''; updateList(); }
   if (b.dataset.print) preview(slips.find(s => s.id === Number(b.dataset.print)));
-  if (b.dataset.delete) openDelete(slips.find(s => s.id === Number(b.dataset.delete)));
   if (b.dataset.track) openTracking(slips.find(s => s.id === Number(b.dataset.track)));
-  if (b.dataset.return) openReturn(slips.find(s => s.id === Number(b.dataset.return)));
-  if (b.dataset.returnAll) openReturn(slips.find(s => s.id === Number(b.dataset.returnAll)), true);
+  const action = ['edit','delete','return','returnAll'].find(key => b.dataset[key]);
+  if (action) {
+    b.disabled = true;
+    try {
+      const [slip] = await Promise.all([api('/api/slips/' + b.dataset[action]), action === 'delete' ? Promise.resolve() : refreshMasters()]);
+      if (action === 'edit') openEditor(slip);
+      else if (action === 'delete') openDelete(slip);
+      else openReturn(slip, action === 'returnAll');
+    } catch (error) { toast(error.message); reload().catch(() => {}); }
+    finally { b.disabled = false; }
+  }
   if (b.dataset.productEdit) {
     const product = products.find(p => p.id === Number(b.dataset.productEdit));
     for (const [k,v] of Object.entries(product)) $('#productForm').elements.namedItem(k).value = v;
@@ -510,19 +531,28 @@ $('#search').oninput = () => {
     view = 'all';
     $('#statusFilter').value = '';
   }
-  render();
+  updateList(true);
 };
-$('#searchField').onchange = render;
-$('#statusFilter').onchange = render;
-$('#requesterFilter').onchange = render;
+$('#searchField').onchange = () => updateList();
+$('#statusFilter').onchange = () => updateList();
+$('#requesterFilter').onchange = () => updateList();
 $('#resetSearch').onclick = () => {
   $('#search').value = '';
   $('#searchField').value = 'all';
   $('#statusFilter').value = '';
   $('#requesterFilter').value = '';
-  render();
+  updateList();
   $('#search').focus();
 };
+$('#previousPage').onclick = () => { if (pageNumber > 1) { --pageNumber; reload().catch(error => toast(error.message)); } };
+$('#nextPage').onclick = () => { if (pageNumber < pageCount) { ++pageNumber; reload().catch(error => toast(error.message)); } };
+$('#pageSize').onchange = e => { pageSize = Number(e.target.value); updateList(); };
+$('#refreshList').onclick = () => reload().catch(error => toast(error.message));
+function refreshWhenIdle() {
+  if (!document.hidden && !document.querySelector('dialog[open]') && $('#slipList').getAttribute('aria-busy') !== 'true') reload().catch(() => {});
+}
+setInterval(refreshWhenIdle, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshWhenIdle(); });
 // Use the same physical half-sheet dimensions for the proof and printed copies.
 function fitSlips(root) {
   root.querySelectorAll('.slip').forEach(slip => {

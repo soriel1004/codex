@@ -60,6 +60,7 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.match(await page.locator('#newBtn').innerText(),/전표 작성/);
     assert.ok(!(await page.locator('#newBtn').innerText()).includes('새 전표'));
     await page.locator('#newBtn').click();
+    await page.locator('#editor').waitFor({state:'visible'});
     assert.equal(await page.locator('#editorTitle').innerText(),'전표 작성');
     assert.equal(await page.locator('#slipForm [name=status]').inputValue(),'발송');
     assert.equal(await page.locator('#editorNumberField').isVisible(),false);
@@ -171,6 +172,32 @@ const {spawn, execFileSync} = require('node:child_process');
     // Simulated saved slips exercise tracking without contacting any carrier.
     const trackingFixture=await (await page.request.get(`http://127.0.0.1:${port}/api/slips`)).json();
     const trackingRoute=`http://127.0.0.1:${port}/api/slips`;
+    const pageRoute=`http://127.0.0.1:${port}/api/slips/page?*`;
+    async function listReady() { await page.locator('#slipList[aria-busy=false]').waitFor(); }
+    // Presentation-only fixtures for carrier links and serial badges. Real indexed
+    // search, paging and concurrent writes are tested against HTTP in test_storage.py.
+    function fixturePage(route, records) {
+      const p=new URL(route.request().url()).searchParams;
+      const fold=v=>String(v||'').normalize('NFKC').toLowerCase();
+      const compact=v=>v.replace(/[\s\p{Dash_Punctuation}\u2212]+/gu,'');
+      const strings=v=>typeof v==='string'?[v]:v&&typeof v==='object'?Object.values(v).flatMap(strings):[];
+      const statusLabel=v=>({'부분반환':'부분완료','반환완료':'완료'})[v]||v;
+      const rows=records.filter(r=>{
+        if(p.get('view')!=='all' && (r.status==='반환완료')!==(p.get('view')==='completed')) return false;
+        if(p.get('status') && r.status!==p.get('status')) return false;
+        if(p.get('requester') && (p.get('requester')==='none'?r.requesters.length:!r.requesters.includes(p.get('requester')))) return false;
+        const fields={number:[r.number],supplier:[r.supplier],trackingNumber:[r.trackingNumber],name:r.items.map(i=>i.name),qrCodeNumber:r.items.map(i=>i.qrCodeNumber),
+          outboundSerial:r.items.map(i=>i.serial).flatMap(v=>String(v||'').split(/[,，\r\n]+/)),
+          receivedSerial:[...r.items.map(i=>i.receivedSerial),...r.returns.flatMap(e=>e.items.map(i=>i.receivedSerial))].flatMap(v=>String(v||'').split(/[,，\r\n]+/)),
+          details:[r.note,r.result,...r.items.flatMap(i=>[i.fault,i.receiptTreatment,i.mbRepairReport]),...r.returns.flatMap(e=>[e.result,e.mbRepairReport])]};
+        fields.serial=[...fields.outboundSerial,...fields.receivedSerial];
+        fields.all=[...Object.values(fields).flat(),...strings({...r,items:r.items.map(i=>({...i,serial:'',receivedSerial:''})),returns:r.returns.map(e=>({...e,items:[]}))}),statusLabel(r.status)];
+        const values=(fields[p.get('field')]||fields.all).map(fold);
+        return fold(p.get('q')).trim().split(/\s+/).filter(Boolean).every(term=>values.some(value=>value.includes(term)||(compact(term)&&compact(value).includes(compact(term)))));
+      });
+      return route.fulfill({json:{rows,total:rows.length,page:1,pages:1,size:50,stats:{total:records.length,active:records.filter(r=>r.status!=='반환완료').length,completed:records.filter(r=>r.status==='반환완료').length,suppliers:2}}});
+    }
+
     // Search all saved fields, including hidden later items and receipt history.
     // Distinct slips ensure a match in the wrong field cannot pass unnoticed.
     const searchBase=trackingFixture[0];
@@ -184,24 +211,30 @@ const {spawn, execFileSync} = require('node:child_process');
         items:[{...searchBase.items[0],name:'완료 메인보드',serial:'OLD-0001',qrCodeNumber:'COMPLETED-QR-0003',receivedSerial:'REPLACED-0002',returnedQty:2,remainingQty:0}],
         returns:[{date:'2026-10-21',result:'수리 입고',items:[{index:0,qty:2,receivedSerial:'REPLACED-0002'}]}]}
     ];
-    await page.route(trackingRoute,route=>route.fulfill({json:searchSlips}));
+    await page.route(pageRoute,route=>fixturePage(route,searchSlips));
+    await page.route(`http://127.0.0.1:${port}/api/slips/9993`,route=>route.fulfill({json:searchSlips[2]}));
     await page.reload();
     await page.locator('#rows [data-edit]').first().waitFor();
     async function checkSearch(field,query,numbers) {
       await page.locator('#searchField').selectOption(field);
+      await listReady();
       await page.locator('#search').fill(query);
+      await listReady();
       assert.deepEqual(await page.locator('#rows td:first-child strong').allTextContents(),numbers,`${field}: ${query}`);
       assert.equal(await page.locator('#count').innerText(),numbers.length+'건');
     }
     await page.locator('#statusFilter').selectOption('부분반환');
+    await listReady();
     await checkSearch('receivedSerial','replaced0002',['261001-03']);
     assert.equal(await page.locator('[data-view=all]').getAttribute('class'),'active');
     assert.equal(await page.locator('#statusFilter').inputValue(),'');
     await page.locator('#rows [data-edit]').click();
+    await page.locator('#editor').waitFor({state:'visible'});
     await page.locator('[data-close=editor]').last().click();
     assert.equal(await page.locator('[data-view=all]').getAttribute('class'),'active');
     assert.equal(await page.locator('#search').inputValue(),'replaced0002');
     await page.locator('[data-view=completed]').click();
+    await listReady();
     await checkSearch('outboundSerial','secondout007',['261019-01']);
     assert.equal(await page.locator('[data-view=all]').getAttribute('class'),'active');
     for (const [field,query] of [
@@ -222,27 +255,36 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.locator('#search').press('Enter');
     assert.equal(await page.locator('#editor').isVisible(),false);
     await page.locator('#requesterFilter').selectOption('대일');
+    await listReady();
     assert.equal(await page.locator('#rows tr').count(),0);
     await page.locator('#statusFilter').selectOption('발송');
+    await listReady();
     await page.locator('#resetSearch').click();
+    await listReady();
     assert.equal(await page.locator('#searchField').inputValue(),'all');
     assert.equal(await page.locator('#requesterFilter').inputValue(),'');
     assert.equal(await page.locator('#statusFilter').inputValue(),'');
     assert.equal(await page.locator('#search').inputValue(),'');
     assert.equal(await page.locator('#rows tr').count(),3);
     await page.locator('#statusFilter').selectOption('부분반환');
+    await listReady();
     await checkSearch('all','001234',['261019-01']);
     await page.locator('#resetSearch').click();
+    await listReady();
     await page.locator('[data-view=active]').click();
+    await listReady();
     await checkSearch('receivedSerial','replaced0002',['261001-03']);
     await page.locator('[data-view=completed]').click();
+    await listReady();
     assert.deepEqual(await page.locator('#rows td:first-child strong').allTextContents(),['261001-03']);
     await page.locator('#resetSearch').click();
+    await listReady();
     assert.equal(await page.locator('[data-view=completed]').getAttribute('class'),'active');
     assert.equal(await page.locator('#rows tr').count(),1);
     await checkSearch('all','   ',['261001-03']);
     assert.equal(await page.locator('[data-view=completed]').getAttribute('class'),'active');
     await page.locator('[data-view=all]').click();
+    await listReady();
     await checkSearch('all','',searchSlips.map(s=>s.number));
     await page.setViewportSize({width:390,height:844});
     for (const selector of ['#searchField','#search','#resetSearch']) {
@@ -250,11 +292,11 @@ const {spawn, execFileSync} = require('node:child_process');
       assert.ok(bounds.x>=0 && bounds.x+bounds.width<=390,`${selector} fits narrow screens`);
     }
     await page.setViewportSize({width:1600,height:1100});
-    await page.unroute(trackingRoute);
+    await page.unroute(pageRoute);
     await page.reload(); await page.locator('#rows [data-edit]').waitFor();
     async function showTracking(courier, trackingNumber) {
-      await page.unroute(trackingRoute);
-      await page.route(trackingRoute,route=>route.fulfill({json:[{...trackingFixture[0],courier,trackingNumber}]}));
+      await page.unroute(pageRoute);
+      await page.route(pageRoute,route=>fixturePage(route,[{...trackingFixture[0],courier,trackingNumber}]));
       await page.reload();
       await page.locator('#rows [data-edit]').waitFor();
     }
@@ -299,18 +341,22 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.locator('#rows [data-track]').click();
     assert.match(await page.locator('#toast').innerText(),/전표 수정에서 확인/);
     assert.equal(await page.locator('#trackingDialog').isVisible(),false);
-    await page.unroute(trackingRoute);
+    await page.unroute(pageRoute);
     await page.reload(); await page.locator('#rows [data-edit]').waitFor();
     const trackingUnchanged=await (await page.request.get(trackingRoute)).json();
     assert.equal(trackingUnchanged[0].courier,'CJ대한통운');
     assert.equal(trackingUnchanged[0].trackingNumber,'0000123456789');
     await page.locator('#requesterFilter').selectOption('none');
+    await listReady();
     assert.equal(await page.locator('#rows [data-edit]').count(),0);
     await page.locator('#requesterFilter').selectOption('GN');
+    await listReady();
     assert.equal(await page.locator('#rows [data-edit]').count(),1);
     await page.locator('#requesterFilter').selectOption('대일');
+    await listReady();
     assert.equal(await page.locator('#rows [data-edit]').count(),0);
     await page.reload(); await page.locator('#rows [data-edit]').click();
+    await page.locator('#editor').waitFor({state:'visible'});
     assert.equal(await page.locator('#receiptDate').inputValue(),'2026-10-19');
     assert.equal(await page.locator('[name=requesters]:checked').count(),1);
     assert.equal(await page.locator('#slipForm [name=courier]').inputValue(),'CJ대한통운');
@@ -324,6 +370,7 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.getByRole('button',{name:'전표 저장',exact:true}).click();
     await page.locator('#rows td:first-child small').filter({hasText:'2026-10-18'}).waitFor();
     await page.locator('#rows [data-return]').click();
+    await page.locator('#returnDialog').waitFor({state:'visible'});
     assert.equal(await page.locator('#returnItems tr').first().locator('textarea').isEnabled(),true);
     assert.equal(await page.locator('#returnForm [name=result]').evaluate(el=>el.tagName),'SELECT');
     const atBottom = await page.locator('#receiptFields').evaluate(el => el.previousElementSibling.id === 'returnHistory' && el.nextElementSibling.classList.contains('modal-footer'));
@@ -351,16 +398,21 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.locator('#rows .badge').filter({hasText:'부분완료'}).waitFor();
     assert.equal(await page.locator('#rows .serial-changes').count(),0);
     await page.locator('#search').fill('부분완료');
+    await listReady();
     assert.equal(await page.locator('#rows [data-edit]').count(),1);
     await page.locator('#search').fill('');
+    await listReady();
     await page.locator('#statusFilter').selectOption({label:'부분완료'});
+    await listReady();
     assert.equal(await page.locator('#rows [data-edit]').count(),1);
     await page.locator('#statusFilter').selectOption('');
+    await listReady();
     const partialData = await (await page.request.get(`http://127.0.0.1:${port}/api/slips`)).json();
     assert.equal(partialData[0].returns[0].result, customTreatment);
     assert.equal(partialData[0].items[0].mbRepairReport,repairReport);
     assert.equal(partialData[0].items[1].mbRepairReport,'');
     await page.locator('#rows [data-edit]').click();
+    await page.locator('#editor').waitFor({state:'visible'});
     assert.equal(await page.locator('#items tr').first().locator('[data-key=name]').getAttribute('readonly'),null);
     await page.locator('#slipForm [name=note]').fill('부분반환 이력 유지');
     await page.getByRole('button',{name:'전표 저장',exact:true}).click();
@@ -383,6 +435,7 @@ const {spawn, execFileSync} = require('node:child_process');
     await page.locator('[data-close=preview]').click();
     // Existing receipt information can still be corrected while a slip is in progress.
     await page.locator('#rows [data-return]').click();
+    await page.locator('#returnDialog').waitFor({state:'visible'});
     assert.equal(await page.locator('.serial-history').count(),1);
     const lastField = await page.locator('.serial-history').first().locator('[data-history-result]').evaluate(el => Boolean(el.closest('.serial-history').lastElementChild.contains(el)));
     assert.ok(lastField, 'history treatment selector must follow serial fields');
@@ -390,13 +443,17 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.equal(await page.locator('.serial-history [data-history-report]').inputValue(),repairReport);
     await page.locator('.serial-history [data-history-report]').fill('정정 수리내역');
     await page.locator('.serial-history').first().locator('[data-history-result]').selectOption('정상 판정');
-    await page.locator('.serial-history').first().locator('[data-save-serials]').click();
-    await page.waitForResponse(r=>r.url().endsWith('/api/slips'));
+    await Promise.all([
+      page.waitForResponse(r=>r.url().includes('/api/slips/page?')),
+      page.locator('.serial-history').first().locator('[data-save-serials]').click()
+    ]);
+    await listReady();
     const receiptData=await (await page.request.get(`http://127.0.0.1:${port}/api/slips`)).json();
     assert.equal(receiptData[0].returns[0].result,'정상 판정');
     assert.equal(receiptData[0].items[0].mbRepairReport,'정정 수리내역');
     await page.locator('[data-close=returnDialog]').last().click();
     await page.locator('#rows [data-return-all]').click();
+    await page.locator('#returnDialog').waitFor({state:'visible'});
     assert.match(await page.locator('#returnTitle').innerText(),/완료 처리/);
     assert.equal(await page.locator('#returnItems [type=checkbox]:checked').count(),2);
     assert.equal(await page.locator('#returnSave').innerText(),'완료 저장');
@@ -407,7 +464,9 @@ const {spawn, execFileSync} = require('node:child_process');
     current=await (await page.request.get(`http://127.0.0.1:${port}/api/slips`)).json();
     assert.equal(current[0].returns.length,1);
     await page.locator('#search').fill('26101901');
+    await listReady();
     await page.locator('#rows [data-return-all]').click();
+    await page.locator('#returnDialog').waitFor({state:'visible'});
     await page.setViewportSize({width:390,height:844});
     const incoming=page.locator('#returnItems tr').first().locator('textarea');
     await incoming.scrollIntoViewIfNeeded();
@@ -426,7 +485,9 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.equal(await page.locator('[data-view=all]').getAttribute('class'),'active');
     assert.equal(await page.locator('#search').inputValue(),'26101901');
     await page.locator('#search').fill('');
+    await listReady();
     await page.locator('[data-view=completed]').click();
+    await listReady();
     await page.locator('#rows .badge').filter({hasText:'완료'}).waitFor();
     const serialChanges=page.locator('#rows .serial-changes');
     assert.equal(await serialChanges.locator('summary').innerText(),'시리얼 변경 · 1품목');
@@ -439,6 +500,7 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.equal(await page.locator('#rows .tracking-link').count(),0);
     assert.deepEqual(await page.locator('#rows .row-actions button').allTextContents(),['수정','전표 출력','삭제']);
     await page.locator('#rows [data-edit]').click();
+    await page.locator('#editor').waitFor({state:'visible'});
     assert.equal(await page.locator('#slipForm [name=status] option:checked').innerText(),'완료');
     const summaries = page.locator('#editorReceiptSerialRows .editor-receipt-row');
     assert.equal(await summaries.count(),2);
@@ -459,6 +521,7 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.deepEqual(afterEdit[0].returns,beforeEdit[0].returns);
     assert.equal(afterEdit[0].items[0].receivedSerial,'000CORRECTED\n000FULL-A');
     await page.locator('#rows [data-edit]').click();
+    await page.locator('#editor').waitFor({state:'visible'});
     await page.locator('#slipForm [name=number]').fill('261019-99');
     await page.locator('#slipForm [name=company]').fill('수정 보낸이');
     await page.locator('#slipForm [name=companyPhone]').fill('010-7777-8888');
@@ -506,9 +569,10 @@ const {spawn, execFileSync} = require('node:child_process');
     ];
     for (const scenario of serialCases) {
       const fixture={...fullyEdited[0],items:fullyEdited[0].items.map((item,index)=>({...item,...scenario.items[index]}))};
-      await page.route(trackingRoute,route=>route.fulfill({json:[fixture]}));
+      await page.route(pageRoute,route=>fixturePage(route,[fixture]));
       await page.reload();
       await page.locator('[data-view=completed]').click();
+      await listReady();
       await page.locator('#rows [data-edit]').waitFor();
       assert.equal(await page.locator('#rows .serial-change-item').count(),scenario.count);
       if (scenario.count) {
@@ -517,12 +581,14 @@ const {spawn, execFileSync} = require('node:child_process');
         assert.ok((await page.locator('#rows .serial-changes').innerText()).includes(scenario.items[1].receivedSerial));
         assert.equal(await page.locator('#rows .serial-changes img').count(),0);
         await page.locator('[data-view=all]').click();
+      await listReady();
         assert.equal(await page.locator('#rows .serial-change-item').count(),scenario.count);
       }
-      await page.unroute(trackingRoute);
+      await page.unroute(pageRoute);
     }
     await page.reload();
     await page.locator('#newBtn').click();
+    await page.locator('#editor').waitFor({state:'visible'});
     assert.equal(await page.locator('#slipForm [name=status]').inputValue(),'발송');
     assert.equal(await page.locator('[name=requesters]:checked').count(),0);
     assert.equal(await page.locator('#items [data-key=qrCodeNumber]').isVisible(),false);
@@ -530,13 +596,16 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.equal(await page.locator('#editorReceiptSerials').isVisible(),false);
     await page.locator('[data-close=editor]').first().click();
     await page.locator('[data-view=completed]').click();
+    await listReady();
     await page.locator('#rows [data-delete]').click();
+    await page.locator('#deleteDialog').waitFor({state:'visible'});
     assert.equal(await page.locator('#deleteSlipNumber').innerText(),'261019-99');
     assert.ok((await page.locator('#deleteSlipDetails').innerText()).includes('받는 업체'));
     assert.equal(await page.locator('#deleteCancel').evaluate(el=>el===document.activeElement),true);
     await page.locator('#deleteCancel').click();
     assert.equal((await (await page.request.get(trackingRoute)).json()).length,1);
     await page.locator('#rows [data-delete]').click();
+    await page.locator('#deleteDialog').waitFor({state:'visible'});
     await page.locator('#deleteConfirm').click();
     await page.locator('#deleteDialog').waitFor({state:'hidden'});
     await page.waitForFunction(()=>document.querySelector('#count').textContent==='0건');
@@ -546,16 +615,20 @@ const {spawn, execFileSync} = require('node:child_process');
     const deletedXml=execFileSync('python3',['-c',"import zipfile,sys;print(zipfile.ZipFile(sys.argv[1]).read('xl/worksheets/sheet1.xml').decode())",path.join(temp,'deleted.xlsx')],{encoding:'utf8'});
     assert.ok(!deletedXml.includes('261019-99'));
     await page.locator('[data-view=active]').click();
+    await listReady();
     await page.locator('#newBtn').click();
+    await page.locator('#editor').waitFor({state:'visible'});
     await page.locator('#slipForm [name=supplier]').selectOption({label:'받는 업체'});
     await page.locator('#items [data-key=name]').first().fill('삭제 확인용 품목');
     await page.getByRole('button',{name:'전표 저장',exact:true}).click();
     await page.locator('#rows [data-delete]').waitFor();
     await page.locator('#rows [data-delete]').click();
+    await page.locator('#deleteDialog').waitFor({state:'visible'});
     await page.keyboard.press('Escape');
     await page.locator('#deleteDialog').waitFor({state:'hidden'});
     assert.equal((await (await page.request.get(trackingRoute)).json()).length,1);
     await page.locator('#rows [data-delete]').click();
+    await page.locator('#deleteDialog').waitFor({state:'visible'});
     await page.locator('#deleteConfirm').click();
     await page.waitForFunction(()=>document.querySelector('#count').textContent==='0건');
     assert.deepEqual(await (await page.request.get(trackingRoute)).json(),[]);

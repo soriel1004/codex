@@ -1,2 +1,6 @@
 data/
 __pycache__/
+server-config.json
+server-config.json.tmp
+AS-client.url
+backups/

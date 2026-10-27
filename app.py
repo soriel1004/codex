@@ -1,28 +1,21 @@
 """AS 전표 관리 — Python 표준 라이브러리만 사용합니다."""
-import io, json, os, re, sqlite3, subprocess, sys, webbrowser, zipfile
+import io, json, os, re, sqlite3, subprocess, sys, webbrowser, zipfile, threading, hashlib
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from urllib.request import urlopen
 from xml.sax.saxutils import escape
 from excel_report import add_as_report
+import storage
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '1.2.1'
+APP_VERSION = '2.0.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
-DATA.mkdir(parents=True, exist_ok=True)
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
 def db():
-    c = sqlite3.connect(DATA / 'as.db')
-    c.execute('CREATE TABLE IF NOT EXISTS slips (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)')
-    c.execute('CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)')
-    c.execute('CREATE TABLE IF NOT EXISTS suppliers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, phone TEXT NOT NULL, address TEXT NOT NULL)')
-    c.execute('CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)')
-    c.execute('CREATE TABLE IF NOT EXISTS receipt_options (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)')
-    c.execute('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)')
-    return c
+    return storage.connect(DATA, normalize)
 
 def status_label(value):
     return {'부분반환':'부분완료', '반환완료':'완료'}.get(value, value)
@@ -33,11 +26,7 @@ def korea_today():
 
 
 def reserve_slip_number(c, number):
-    match = re.fullmatch(r'(\d{6})-(\d+)', number)
-    if match:
-        c.execute('INSERT INTO app_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE '
-                  'SET value=MAX(CAST(app_meta.value AS INTEGER),CAST(excluded.value AS INTEGER))',
-                  ('slip_number_max:' + match[1], str(int(match[2]))))
+    storage.reserve_number(c, number)
 
 
 def next_slip_number(c, date):
@@ -45,13 +34,8 @@ def next_slip_number(c, date):
     # suffixes even when an existing slip's receipt date has later been edited.
     prefix = datetime.strptime(date, '%Y-%m-%d').strftime('%y%m%d')
     reserved = c.execute('SELECT value FROM app_meta WHERE key=?', ('slip_number_max:' + prefix,)).fetchone()
-    count, highest = 0, int(reserved[0]) if reserved else 0
-    for (body,) in c.execute('SELECT body FROM slips'):
-        r = json.loads(body)
-        count += r.get('date') == date
-        match = re.fullmatch(re.escape(prefix) + r'-(\d+)', r.get('number', ''))
-        if match:
-            highest = max(highest, int(match[1]))
+    count = c.execute('SELECT COUNT(*) FROM slips WHERE receipt_date=?', (date,)).fetchone()[0]
+    highest = int(reserved[0]) if reserved else 0
     number = f'{prefix}-{max(count, highest) + 1:02d}'
     reserve_slip_number(c, number)
     return number
@@ -342,7 +326,47 @@ class Handler(BaseHTTPRequestHandler):
         if content.startswith('application/vnd'): self.send_header('Content-Disposition',f'attachment; filename="AS-report-V{APP_VERSION}.xlsx"')
         self.end_headers(); self.wfile.write(body)
     def do_GET(self):
+        try:
+            self.get_response()
+        except (ValueError,TypeError) as error:
+            self.send({'error':str(error)},status=400)
+        except sqlite3.OperationalError as error:
+            self.database_error(error)
+        except (BrokenPipeError,ConnectionResetError):
+            pass
+        except OSError as error:
+            self.log_error('File operation: %s', error)
+            self.send({'error':'서버의 데이터 또는 백업 폴더를 사용할 수 없습니다. 저장 공간과 폴더 권한을 확인하세요.'},status=503)
+
+    def database_error(self, error):
+        self.log_error('Database: %s', error)
+        self.send({'error':'서버에서 다른 저장을 처리 중이거나 데이터 파일을 사용할 수 없습니다. 잠시 후 다시 시도하세요. 입력한 내용은 유지됩니다.'},status=503)
+
+    def get_response(self):
         path=urlparse(self.path).path
+        if path=='/api/slips/page':
+            with db() as c:
+                result = storage.page_records(c, parse_qs(urlparse(self.path).query, keep_blank_values=True), normalize)
+            return self.send(result)
+        if re.fullmatch(r'/api/slips/\d+', path):
+            with db() as c: row = c.execute('SELECT body FROM slips WHERE id=?', (int(path.rsplit('/',1)[1]),)).fetchone()
+            return self.send(normalize(dict(json.loads(row[0]),id=int(path.rsplit('/',1)[1]))) if row else {'error':'이미 삭제되었거나 없는 전표입니다.'},status=200 if row else 404)
+        if path=='/api/backup':
+            with db(): pass
+            backup = storage.snapshot(DATA/'as.db', DATA/'backups')
+            try:
+                self.send_response(200)
+                self.send_header('Content-Type','application/octet-stream')
+                self.send_header('Content-Length',str(backup.stat().st_size))
+                self.send_header('Content-Disposition',f'attachment; filename="{backup.name}"')
+                self.send_header('Cache-Control','no-store')
+                self.end_headers()
+                with backup.open('rb') as source:
+                    while chunk := source.read(65536): self.wfile.write(chunk)
+            finally:
+                backup.unlink(missing_ok=True)
+            return
+        if path=='/api/health': return self.send({'ok':True,'version':APP_VERSION,'instance':data_instance()})
         if path=='/api/slips': return self.send(records())
         if path=='/api/receipt-options': return self.send([row['name'] for row in receipt_option_rows()])
         if path=='/api/receipt-options/manage': return self.send(receipt_option_rows())
@@ -361,8 +385,13 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(body, {'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}[file.suffix[1:]])
     def do_POST(self):
         try:
+            origin = self.headers.get('Origin')
+            if origin and urlparse(origin).netloc.casefold() != self.headers.get('Host','').casefold():
+                return self.send({'error':'프로그램을 연 서버 주소에서만 저장할 수 있습니다.'},status=403)
+            if self.headers.get('Content-Type','').split(';')[0].strip().lower() != 'application/json':
+                return self.send({'error':'JSON 형식으로 요청하세요.'},status=415)
             length=int(self.headers.get('Content-Length',0))
-            if length>200000: raise ValueError('입력 내용이 너무 큽니다.')
+            if length < 0 or length>200000: raise ValueError('입력 내용이 너무 큽니다.')
             data=json.loads(self.rfile.read(length))
             path=urlparse(self.path).path
             if path == '/api/slips/delete':
@@ -505,7 +534,7 @@ class Handler(BaseHTTPRequestHandler):
                         number = str(data.get('number', old['number'])).strip()
                         if not number or len(number) > 60 or any(ord(ch) < 32 for ch in number):
                             raise ValueError('전표번호를 1~60자로 입력하세요.')
-                        if any(json.loads(body).get('number') == number for other_id,body in c.execute('SELECT id,body FROM slips WHERE id<>?', (id,))):
+                        if c.execute('SELECT 1 FROM slips WHERE number=? AND id<>? LIMIT 1', (number,id)).fetchone():
                             raise ValueError('이미 사용 중인 전표번호입니다.')
                         result['number'] = number
                     else:
@@ -514,9 +543,10 @@ class Handler(BaseHTTPRequestHandler):
                         id = cursor.lastrowid
                     result = normalize(result)
                 result.pop('id', None)
-                c.execute('UPDATE slips SET body=? WHERE id=?', (json.dumps(result,ensure_ascii=False), id))
+                storage.save_record(c, id, result)
             return self.send(dict(result, id=id))
         except (ValueError,TypeError,KeyError,AttributeError) as e: return self.send({'error':str(e)},status=400)
+        except sqlite3.OperationalError as error: return self.database_error(error)
 
 def windows_browser_command(url):
     import winreg
@@ -563,13 +593,55 @@ def open_program_window(url):
 
 def existing_program(url):
     try:
-        with urlopen(url, timeout=2) as response:
-            return '<title>부품 AS · 전표 관리</title>'.encode() in response.read(4096)
-    except OSError:
+        with urlopen(url.rstrip('/') + '/api/health', timeout=2) as response:
+            health = json.load(response)
+            return health.get('ok') is True and health.get('version') == APP_VERSION and health.get('instance') == data_instance()
+    except (OSError,ValueError,AttributeError):
         return False
 
 
+def data_instance():
+    return hashlib.sha256(os.path.normcase(str(DATA.resolve())).encode()).hexdigest()[:24]
+
+
+def start_backup_worker():
+    stop = threading.Event()
+    def run():
+        completed = ''
+        while not stop.is_set():
+            day = korea_today().isoformat()
+            if completed != day:
+                try:
+                    local = DATA / 'backups'
+                    existing = sorted(local.glob('as-manager-daily-' + day.replace('-','') + '-*.db')) if local.exists() else []
+                    backup = existing[-1] if existing else storage.snapshot(DATA/'as.db', local, 'as-manager-daily')
+                    destination = Path(os.environ.get('AS_BACKUP_DIR', str(local)))
+                    if destination.resolve() != local.resolve():
+                        destination.mkdir(parents=True,exist_ok=True)
+                        target = destination / backup.name
+                        temporary = destination / (backup.name + '.tmp')
+                        try:
+                            import shutil
+                            shutil.copyfile(backup, temporary)
+                            temporary.replace(target)
+                        finally:
+                            temporary.unlink(missing_ok=True)
+                    for folder in {local.resolve(),destination.resolve()}:
+                        # Only rotate automatic daily snapshots; manual and migration backups stay.
+                        for old in sorted(folder.glob('as-manager-daily-*.db'),reverse=True)[14:]:
+                            old.unlink()
+                    completed = day
+                    print('자동 백업:',backup.name,flush=True)
+                except (OSError,sqlite3.Error,ValueError) as error:
+                    print('백업을 완료하지 못했습니다. 5분 후 재시도:',error,flush=True)
+            if stop.wait(300): break
+    thread = threading.Thread(target=run,name='daily-backup',daemon=True)
+    thread.start()
+    return stop, thread
+
+
 def main():
+    storage.require_local(DATA)
     host = os.environ.get('AS_HOST', '127.0.0.1')
     port = int(os.environ.get('PORT', '8000'))
     print(f'AS 전표 관리 V{APP_VERSION}: http://{host}:{port}', flush=True)
@@ -580,13 +652,23 @@ def main():
         if '--open-browser' in sys.argv and existing_program(url):
             open_program_window(url)
             return
-        raise
-    if '--open-browser' in sys.argv:
-        try:
-            open_program_window(f'http://127.0.0.1:{server.server_port}')
-        except OSError as error:
-            print(f'Browser could not be opened: {error}', flush=True)
-    server.serve_forever()
+        raise ValueError(f'{port}번 포트를 사용할 수 없습니다. 기존 프로그램의 커맨드 창을 종료하거나 다른 포트로 설정하세요.')
+    try:
+        with storage.ServerLock(DATA):
+            with db(): pass
+            stop, worker = start_backup_worker()
+            try:
+                if '--open-browser' in sys.argv:
+                    try:
+                        open_program_window(f'http://127.0.0.1:{server.server_port}')
+                    except OSError as error:
+                        print(f'Browser could not be opened: {error}', flush=True)
+                server.serve_forever()
+            finally:
+                stop.set()
+                worker.join(timeout=3)
+    finally:
+        if hasattr(server, 'server_close'): server.server_close()
 
 
 if __name__=='__main__':

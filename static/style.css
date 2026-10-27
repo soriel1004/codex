@@ -123,3 +123,5 @@ header{min-height:83px;height:auto;gap:12px;flex-wrap:wrap;padding-top:15px;padd
 
 .slip-search{padding:0 22px 18px}.slip-search-controls{display:flex;gap:8px;align-items:center}.slip-search-controls select{flex:0 1 220px;min-width:0}.slip-search-controls input{flex:1;min-width:0}.slip-search-controls button{flex:none}#searchHelp{font-size:12px;line-height:1.7;color:#627189;margin:10px 0 0;overflow-wrap:anywhere}
 @media screen and (max-width:600px){.slip-search-controls{flex-wrap:wrap}.slip-search-controls select{flex-basis:100%}.slip-search-controls input{width:0}.slip-search{padding:0 18px 18px}}
+
+.list-pagination{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:16px 22px;font-size:12px}.list-pagination label{flex-direction:row;align-items:center}.list-pagination select{width:auto;padding:6px}.list-pagination button{padding:7px 12px}.list-pagination #listMessage{color:#627189;margin-left:auto}#slipList[aria-busy=true] #rows{opacity:.55}.header-actions{flex-wrap:wrap}
