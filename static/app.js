@@ -54,9 +54,63 @@ function updateTrackingLink() {
   else $('#trackingOpen').removeAttribute('href');
 }
 $('#trackingCarrier').onchange = updateTrackingLink;
+let appInitialized = false, initializationTask = null;
+let connectionProbe = null, connectionFailures = 0, connectionLost = false, connectedShare = null;
+const connectionWarnings = [document.body, ...document.querySelectorAll('dialog')].map(parent => {
+  const warning = document.createElement('aside');
+  warning.className = 'connection-warning';
+  warning.hidden = true;
+  warning.setAttribute('role', 'alert');
+  warning.innerHTML = '<div><strong>서버와 연결이 끊겼습니다.</strong><p>서버가 종료되었거나 네트워크에 문제가 있습니다. 작성 중인 내용을 복사해 보관한 뒤 프로그램 창을 닫고, NAS의 start-windows.bat를 다시 실행하세요. 서버가 없으면 다시 실행한 PC가 자동으로 서버가 됩니다.</p><p>저장 도중 연결이 끊겼다면 재실행 후 목록에서 반영 여부를 먼저 확인하세요.</p></div><button type="button">연결 다시 확인</button>';
+  warning.querySelector('button').onclick = () => checkServerConnection();
+  parent.prepend(warning);
+  return warning;
+});
+function showConnectionWarning() {
+  connectionLost = true;
+  connectionWarnings.forEach(warning => { warning.hidden = false; });
+}
+function checkServerConnection() {
+  if (connectionProbe) return connectionProbe;
+  connectionWarnings.forEach(warning => { warning.querySelector('button').disabled = true; });
+  connectionProbe = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+      const response = await fetch('/api/health', {cache:'no-store', signal:controller.signal});
+      const health = await response.json();
+      if (!response.ok || health.ok !== true || !health.instance || (connectedShare && health.share_id !== connectedShare)) throw Error('서버 연결 확인 실패');
+      connectedShare = health.share_id || connectedShare;
+      connectionFailures = 0;
+      const recovered = connectionLost;
+      connectionLost = false;
+      connectionWarnings.forEach(warning => { warning.hidden = true; });
+      if (health.server_pc) { $('#serverInfo').textContent = '자동 서버 · ' + health.server_pc; $('#serverInfo').hidden = false; }
+      if (!appInitialized) initializeApp();
+      else if (recovered) { toast('서버에 다시 연결되었습니다. 저장 중이던 내용은 목록에서 반영 여부를 확인하세요.'); refreshWhenIdle(); }
+      return true;
+    } catch (_) {
+      if (++connectionFailures >= 2) showConnectionWarning();
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      connectionProbe = null;
+      connectionWarnings.forEach(warning => { warning.querySelector('button').disabled = false; });
+    }
+  })();
+  return connectionProbe;
+}
 async function api(path, data) {
-  const r = await fetch(path, data ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)} : {});
-  const j = await r.json();
+  let r, j;
+  try {
+    r = await fetch(path, data ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)} : {});
+    j = await r.json();
+  } catch (_) {
+    showConnectionWarning();
+    checkServerConnection();
+    throw Error(data ? '저장 결과를 확인하지 못했습니다. 연결 복구 후 목록에서 반영 여부를 확인한 뒤 다시 시도하세요.' : '서버에 연결할 수 없습니다. 연결 안내를 확인하세요.');
+  }
+  if (r.status === 503) checkServerConnection();
   if (!r.ok) throw Error(j.error || '요청 실패');
   return j;
 }
@@ -144,6 +198,7 @@ async function reload() {
     $('#listMessage').textContent = '목록 갱신: ' + headerTimeFormat.format(new Date());
   } catch (error) {
     if (error.name === 'AbortError' || sequence !== listSequence) return;
+    checkServerConnection();
     $('#listMessage').textContent = '목록을 갱신하지 못했습니다. 새로고침을 눌러 다시 시도하세요.';
     throw error;
   } finally {
@@ -549,7 +604,7 @@ $('#nextPage').onclick = () => { if (pageNumber < pageCount) { ++pageNumber; rel
 $('#pageSize').onchange = e => { pageSize = Number(e.target.value); updateList(); };
 $('#refreshList').onclick = () => reload().catch(error => toast(error.message));
 function refreshWhenIdle() {
-  if (!document.hidden && !document.querySelector('dialog[open]') && $('#slipList').getAttribute('aria-busy') !== 'true') reload().catch(() => {});
+  if (!connectionLost && !document.hidden && !document.querySelector('dialog[open]') && $('#slipList').getAttribute('aria-busy') !== 'true') reload().catch(() => {});
 }
 setInterval(refreshWhenIdle, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshWhenIdle(); });
@@ -614,9 +669,19 @@ $('#printBtn').onclick = async () => {
   await document.fonts.ready;
   if (preparePrint()) window.print();
 };
-(async () => {
-  try { settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); products = await api('/api/products'); receiptOptions = await api('/api/receipt-options'); await reload();
-    const health = await api('/api/health');
-    if (health.server_pc) { $('#serverInfo').textContent = '자동 서버 · ' + health.server_pc; $('#serverInfo').hidden = false; } }
-  catch (e) { toast('서버 연결 오류: ' + e.message); }
-})();
+function initializeApp() {
+  if (initializationTask) return initializationTask;
+  initializationTask = (async () => {
+    try {
+      settings = await api('/api/settings'); suppliers = await api('/api/suppliers'); products = await api('/api/products'); receiptOptions = await api('/api/receipt-options'); await reload();
+      appInitialized = true;
+    } catch (e) { toast('서버 연결 오류: ' + e.message); }
+    finally { initializationTask = null; }
+  })();
+  return initializationTask;
+}
+checkServerConnection();
+setInterval(checkServerConnection, 5000);
+window.addEventListener('online', checkServerConnection);
+window.addEventListener('offline', showConnectionWarning);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkServerConnection(); });

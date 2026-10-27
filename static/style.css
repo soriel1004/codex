@@ -125,3 +125,8 @@ header{min-height:83px;height:auto;gap:12px;flex-wrap:wrap;padding-top:15px;padd
 @media screen and (max-width:600px){.slip-search-controls{flex-wrap:wrap}.slip-search-controls select{flex-basis:100%}.slip-search-controls input{width:0}.slip-search{padding:0 18px 18px}}
 
 .list-pagination{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:16px 22px;font-size:12px}.list-pagination label{flex-direction:row;align-items:center}.list-pagination select{width:auto;padding:6px}.list-pagination button{padding:7px 12px}.list-pagination #listMessage{color:#627189;margin-left:auto}#slipList[aria-busy=true] #rows{opacity:.55}.header-actions{flex-wrap:wrap}
+
+.connection-warning{display:flex;align-items:flex-start;gap:16px;padding:16px 22px;border:1px solid #efb5af;border-radius:6px;background:#fff1ef;color:#8b2118;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.connection-warning strong{font-size:15px}.connection-warning p{margin:6px 0 0}.connection-warning button{flex:none;white-space:nowrap;border-color:#d98e85;color:#8b2118;background:white}
+body>.connection-warning{position:sticky;top:0;z-index:110;border-radius:0}dialog>.connection-warning{position:sticky;top:0;z-index:1;margin-bottom:16px}
+@media screen and (max-width:600px){.connection-warning{flex-direction:column;gap:10px;padding:12px}}
