@@ -3,6 +3,7 @@ import json
 import os
 import socket
 import sqlite3
+import subprocess
 import sys
 from contextlib import closing
 from pathlib import Path
@@ -122,6 +123,17 @@ def compact_database(data):
         print(f'정리 완료: {before:,} → {(data/"as.db").stat().st_size:,} bytes. 백업: {backup}')
 
 
+def restart_program():
+    # Called only after the old gateway, browser, backend and NAS locks are closed.
+    options = {'cwd':str(ROOT)}
+    if os.name == 'nt':
+        info = subprocess.STARTUPINFO()
+        info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        info.wShowWindow = 2  # SW_SHOWMINIMIZED
+        options.update(startupinfo=info, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    subprocess.Popen([sys.executable,str(ROOT/'launcher.py'),'--auto','--open-browser'],**options)
+
+
 def main():
     if '--auto' in sys.argv or (ROOT/'.as-shared').exists() or storage.is_network_path(ROOT):
         import auto_server
@@ -147,7 +159,9 @@ def main():
             finally:
                 coordinator.close()
             return
-        return auto_server.run(ROOT,import_initial)
+        result = auto_server.run(ROOT,import_initial)
+        if result == 'restart': restart_program()
+        return result
     if '--setup' in sys.argv:
         return setup()
     config = read_config()

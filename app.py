@@ -10,7 +10,7 @@ from excel_report import add_as_report
 import storage
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '3.2.0'
+APP_VERSION = '3.3.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
@@ -386,7 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                 health.update(share_id=storage.active_sync.identity['share_id'],leader_token=storage.active_sync.token,server_pc=storage.active_sync.owner('ready')['pc'])
             return self.send(health)
         if path=='/api/program':
-            return self.send({'nativeBackup':False, 'canExit':False, 'server':False})
+            return self.send({'nativeBackup':False, 'canExit':False, 'canRestart':False, 'server':False})
         if path=='/api/slips': return self.send(records())
         if path=='/api/receipt-options': return self.send([row['name'] for row in receipt_option_rows()])
         if path=='/api/receipt-options/manage': return self.send(receipt_option_rows())

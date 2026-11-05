@@ -12,7 +12,9 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 import app
+import auto_server
 import desktop_session
+import launcher
 
 
 class DesktopWindows(unittest.TestCase):
@@ -91,6 +93,55 @@ class DesktopWindows(unittest.TestCase):
             self.post(session, anonymous, '/api/program/exit')
         self.assertEqual(rejected.exception.code, 403)
         self.assertFalse(session.closing)
+
+    def test_restart_request_closes_client_without_stopping_backend(self):
+        session, opener = self.session(can_restart=True)
+        with opener.open(session.origin + '/api/program') as response:
+            self.assertTrue(json.load(response)['canRestart'])
+        self.post(session, opener, '/api/program/restart')
+        self.assertTrue(session.stopped.wait(3))
+        self.assertTrue(session.restart_requested)
+        self.assertTrue(self.worker.is_alive())
+
+    def test_restart_requires_capability_and_waits_for_backup(self):
+        session, opener = self.session()
+        with self.assertRaises(HTTPError) as rejected:
+            self.post(session, opener, '/api/program/restart')
+        self.assertEqual(rejected.exception.code, 409)
+        session.can_restart = True
+        session.backup_lock.acquire()
+        try:
+            with self.assertRaises(HTTPError) as rejected:
+                self.post(session, opener, '/api/program/restart')
+            self.assertEqual(rejected.exception.code, 409)
+            self.assertFalse(session.restart_requested)
+        finally: session.backup_lock.release()
+
+    def test_launcher_restarts_only_after_automatic_session_cleanup(self):
+        events = []
+        with patch.object(launcher.sys, 'argv', ['launcher.py','--auto']), \
+             patch.object(auto_server, 'run', side_effect=lambda *args: events.append('old session closed') or 'restart'), \
+             patch.object(launcher, 'restart_program', side_effect=lambda:events.append('new launch')):
+            self.assertEqual(launcher.main(), 'restart')
+        self.assertEqual(events, ['old session closed','new launch'])
+        with patch.object(launcher.sys, 'argv', ['launcher.py','--auto']), \
+             patch.object(auto_server, 'run', return_value='client'), \
+             patch.object(launcher, 'restart_program') as restart:
+            launcher.main()
+            restart.assert_not_called()
+
+    def test_restart_launches_same_program_in_new_minimized_console(self):
+        fake_os = SimpleNamespace(name='nt')
+        with patch.object(launcher, 'os', fake_os), \
+             patch.object(launcher.subprocess, 'STARTUPINFO', create=True) as startup, \
+             patch.object(launcher.subprocess, 'STARTF_USESHOWWINDOW', 1, create=True), \
+             patch.object(launcher.subprocess, 'CREATE_NEW_CONSOLE', 16, create=True), \
+             patch.object(launcher.subprocess, 'Popen') as popen:
+            startup.return_value.dwFlags = 0
+            launcher.restart_program()
+            self.assertEqual(popen.call_args.args[0], [launcher.sys.executable,str(launcher.ROOT/'launcher.py'),'--auto','--open-browser'])
+            self.assertEqual(popen.call_args.kwargs['creationflags'], 16)
+            self.assertEqual(popen.call_args.kwargs['startupinfo'].wShowWindow, 2)
 
     def test_forwarded_settings_write_uses_server_data(self):
         session, opener = self.session()

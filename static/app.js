@@ -55,15 +55,16 @@ function updateTrackingLink() {
 }
 $('#trackingCarrier').onchange = updateTrackingLink;
 let appInitialized = false, initializationTask = null, programExiting = false;
-let programInfo = {nativeBackup:false, canExit:false, server:false};
+let programInfo = {nativeBackup:false, canExit:false, canRestart:false, server:false};
+let disconnectPromptShown = false, programActionPending = false;
 let connectionProbe = null, connectionFailures = 0, connectionLost = false, connectedShare = null;
-const connectionWarnings = [document.body, ...document.querySelectorAll('dialog')].map(parent => {
+const connectionWarnings = [document.body, ...document.querySelectorAll('dialog:not(#connectionDialog)')].map(parent => {
   const warning = document.createElement('aside');
   warning.className = 'connection-warning';
   warning.hidden = true;
   warning.setAttribute('role', 'alert');
-  warning.innerHTML = '<div><strong>서버와 연결이 끊겼습니다.</strong><p>서버가 종료되었거나 네트워크에 문제가 있습니다. 작성 중인 내용을 복사해 보관한 뒤 프로그램 창을 닫고, NAS의 start-windows.bat를 다시 실행하세요. 서버가 없으면 다시 실행한 PC가 자동으로 서버가 됩니다.</p><p>저장 도중 연결이 끊겼다면 재실행 후 목록에서 반영 여부를 먼저 확인하세요.</p></div><button type="button">연결 다시 확인</button>';
-  warning.querySelector('button').onclick = () => checkServerConnection();
+  warning.innerHTML = '<div><strong>서버와 연결이 끊겼습니다.</strong><p>서버가 종료되었거나 네트워크에 문제가 있습니다. 작성 중인 내용을 복사해 보관한 뒤 팝업의 ‘재실행해서 서버로’를 선택하거나 NAS의 start-windows.bat를 다시 실행하세요. 서버가 없으면 다시 실행한 PC가 자동으로 서버가 됩니다.</p><p>저장 도중 연결이 끊겼다면 재실행 후 목록에서 반영 여부를 먼저 확인하세요.</p></div><button type="button">연결 다시 확인</button>';
+  warning.querySelector('button').onclick = () => { disconnectPromptShown = false; return checkServerConnection(); };
   parent.prepend(warning);
   return warning;
 });
@@ -71,7 +72,35 @@ function showConnectionWarning() {
   if (programExiting) return;
   connectionLost = true;
   connectionWarnings.forEach(warning => { warning.hidden = false; });
+  openDisconnectionDialog();
 }
+function openDisconnectionDialog() {
+  if (!programInfo.canExit || disconnectPromptShown || programExiting) return;
+  disconnectPromptShown = true;
+  $('#connectionRestart').disabled = !programInfo.canRestart;
+  $('#connectionActionMessage').textContent = '';
+  $('#connectionDialog').showModal();
+  // A scanner's Enter must not accidentally choose Exit or Restart.
+  $('#connectionTitle').focus();
+}
+async function disconnectedAction(restart) {
+  if (programActionPending) return;
+  programActionPending = true;
+  $('#connectionExit').disabled = $('#connectionRestart').disabled = true;
+  $('#connectionActionMessage').textContent = restart ? '현재 창을 종료한 뒤 자동으로 재실행합니다…' : '프로그램을 종료하고 있습니다…';
+  try {
+    await api(restart ? '/api/program/restart' : '/api/program/exit', {});
+    programExiting = true;
+    connectionWarnings.forEach(warning => { warning.hidden = true; });
+  } catch (error) {
+    $('#connectionActionMessage').textContent = error.message;
+    $('#connectionExit').disabled = false;
+    $('#connectionRestart').disabled = !programInfo.canRestart;
+    programActionPending = false;
+  }
+}
+$('#connectionExit').onclick = () => disconnectedAction(false);
+$('#connectionRestart').onclick = () => disconnectedAction(true);
 function checkServerConnection() {
   if (programExiting) return Promise.resolve(false);
   if (connectionProbe) return connectionProbe;
@@ -87,6 +116,8 @@ function checkServerConnection() {
       connectionFailures = 0;
       const recovered = connectionLost;
       connectionLost = false;
+      disconnectPromptShown = false;
+      if (!programActionPending && $('#connectionDialog').open) $('#connectionDialog').close();
       connectionWarnings.forEach(warning => { warning.hidden = true; });
       if (health.server_pc) { $('#serverInfo').textContent = '자동 서버 · ' + health.server_pc; $('#serverInfo').hidden = false; }
       if (!appInitialized) initializeApp();
@@ -712,7 +743,7 @@ function initializeApp() {
   })();
   return initializationTask;
 }
-api('/api/program').then(info => { programInfo = info; }).catch(() => {});
+api('/api/program').then(info => { programInfo = info; if (connectionLost) openDisconnectionDialog(); }).catch(() => {});
 checkServerConnection();
 setInterval(checkServerConnection, 5000);
 window.addEventListener('online', checkServerConnection);

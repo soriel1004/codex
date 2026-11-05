@@ -48,13 +48,16 @@ try {
 
 
 class DesktopSession:
-    def __init__(self, backend, on_exit=None, picker=choose_backup_path):
+    def __init__(self, backend, on_exit=None, picker=choose_backup_path, can_restart=False):
         parsed = urlparse(backend)
         if parsed.scheme != 'http' or not parsed.hostname or parsed.path not in ('', '/') or parsed.query or parsed.fragment or parsed.username or parsed.password:
             raise ValueError('프로그램 서버 주소를 확인하세요.')
         self.backend = backend.rstrip('/')
         self.on_exit = on_exit
         self.picker = picker
+        self.can_restart = can_restart
+        self.restart_requested = False
+        self.transition_requested = False
         self.token = secrets.token_urlsafe(32)
         self.stopped = threading.Event()
         self.backup_lock = threading.Lock()
@@ -105,7 +108,7 @@ class DesktopSession:
                     self.end_headers(); return
                 if not self.authorized(): return
                 if parsed.path == '/api/program':
-                    return self.send({'nativeBackup':True, 'canExit':True, 'server':session.on_exit is not None})
+                    return self.send({'nativeBackup':True, 'canExit':True, 'canRestart':session.can_restart, 'server':session.on_exit is not None})
                 self.proxy()
 
             def do_POST(self):
@@ -120,16 +123,27 @@ class DesktopSession:
                     return self.send({'error':'요청 크기를 확인하세요.'}, 400)
                 endpoint = urlparse(self.path).path
                 if endpoint == '/api/program/backup':
-                    if not session.backup_lock.acquire(blocking=False):
-                        return self.send({'error':'백업 저장이 진행 중입니다.'}, 409)
+                    with session.close_lock:
+                        if session.transition_requested or session.closing:
+                            return self.send({'error':'프로그램을 종료하고 있습니다.'}, 409)
+                        if not session.backup_lock.acquire(blocking=False):
+                            return self.send({'error':'백업 저장이 진행 중입니다.'}, 409)
                     try:
                         self.send(session.save_backup())
                     except (OSError, ValueError) as error:
                         self.send({'error':str(error)}, 503)
                     finally: session.backup_lock.release()
-                elif endpoint == '/api/program/exit':
-                    if session.backup_lock.locked():
-                        return self.send({'error':'백업 저장을 마친 뒤 종료하세요.'}, 409)
+                elif endpoint in ('/api/program/exit', '/api/program/restart'):
+                    restart = endpoint.endswith('/restart')
+                    with session.close_lock:
+                        if restart and not session.can_restart:
+                            return self.send({'error':'NAS의 start-windows.bat로 프로그램을 다시 실행하세요.'}, 409)
+                        if session.closing or session.transition_requested:
+                            return self.send({'error':'이미 종료 또는 재실행 중입니다.'}, 409)
+                        if session.backup_lock.locked():
+                            return self.send({'error':'백업 저장을 마친 뒤 종료하세요.'}, 409)
+                        session.restart_requested = restart
+                        session.transition_requested = True
                     self.send({'ok':True})
                     threading.Thread(target=session.close, daemon=True).start()
                 else:

@@ -452,11 +452,12 @@ def run(root, import_initial=None, local_base=None, open_browser=True):
             print('기존 서버에 클라이언트로 접속:',url,flush=True)
             if open_browser and os.name == 'nt':
                 from desktop_session import DesktopSession
-                desktop = DesktopSession(url)
+                desktop = DesktopSession(url,can_restart=True)
                 try:
                     desktop.start()
                     desktop.wait()
                 finally: desktop.close()
+                if desktop.restart_requested: return 'restart'
             elif open_browser: app.open_program_window(url)
             return 'client'
     server = None
@@ -475,10 +476,10 @@ def run(root, import_initial=None, local_base=None, open_browser=True):
             coordinator.ready(port)
             if open_browser and os.name == 'nt':
                 from desktop_session import DesktopSession
-                desktop = DesktopSession(f'http://127.0.0.1:{port}',on_exit=server.shutdown)
+                desktop = DesktopSession(f'http://127.0.0.1:{port}',on_exit=server.shutdown,can_restart=True)
                 desktop.start()
         app.main(prepared_server=server,on_ready=ready,open_browser=open_browser and os.name != 'nt')
-        return 'server'
+        return 'restart' if desktop and desktop.restart_requested else 'server'
     finally:
         if desktop: desktop.close()
         if server: server.server_close()

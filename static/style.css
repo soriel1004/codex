@@ -134,3 +134,5 @@ body>.connection-warning{position:sticky;top:0;z-index:110;border-radius:0}dialo
 .item-table{min-width:1020px}.item-table.has-gn-qr{min-width:1220px}.item-table [data-key=note]{min-width:170px}.item-table [data-cell=fault]{width:auto}.item-table [data-cell=note]{width:20%}
 #exitBtn{color:#a3322b;border-color:#ebc4bf}#exitDialog,#backupHelp{width:min(540px,94vw)}#exitDialog p,#backupHelp p{line-height:1.7;overflow-wrap:anywhere}
 @media screen and (max-width:600px){.stats{gap:8px}.stats article{padding:10px 12px;min-height:56px}.stats strong{font-size:22px}}
+
+#connectionDialog{width:min(620px,94vw)}#connectionDialog p{line-height:1.7;overflow-wrap:anywhere}#connectionDialog .modal-footer{flex-wrap:wrap}#connectionActionMessage{color:#a3322b;font-size:13px}#connectionTitle:focus{outline:none}
