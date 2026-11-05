@@ -246,6 +246,9 @@ class AutoProcesses(unittest.TestCase):
         pc1,_=self.launch('PC1'); first=self.ready()
         self.request(first,'/api/suppliers',{'name':'자동 접속 업체','phone':'02-123-4567'})
         self.request(first,'/api/settings',{'company':'우리 업체'})
+        self.request(first,'/api/suppliers',{'name':'삭제한 받는이','phone':'010-1234-5678'})
+        removed=next(s for s in self.request(first,'/api/suppliers') if s['name']=='삭제한 받는이')
+        self.request(first,'/api/suppliers/delete',removed)
         slip=self.request(first,'/api/slips',{'date':'2026-10-19','supplier':'자동 접속 업체','company':'우리 업체','status':'발송','kind':'AS 발송',
             'requesters':['GN'],'trackingNumber':'0000123456789','items':[{'name':'메인보드','serial':'000OUT','qrCodeNumber':'000QR','qty':2}]})
         slip=self.request(first,'/api/returns',{'id':slip['id'],'version':slip['version'],'date':'2026-10-20','items':[{'index':0,'qty':1,'receivedSerial':'000IN'}],'mbRepairReport':'수리 내역'})
@@ -255,6 +258,7 @@ class AutoProcesses(unittest.TestCase):
         pc1.kill(); pc1.wait(timeout=10)
         pc2,_=self.launch('PC2'); second=self.ready(first['generation'])
         restored=self.request(second,'/api/slips/'+str(slip['id']))
+        self.assertNotIn('삭제한 받는이',[s['name'] for s in self.request(second,'/api/suppliers')])
         self.assertEqual(restored['items'][0]['receivedSerial'],'000IN')
         self.assertEqual(restored['items'][0]['qrCodeNumber'],'000QR')
         self.assertEqual(restored['items'][0]['mbRepairReport'],'수리 내역')

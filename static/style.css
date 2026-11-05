@@ -142,3 +142,7 @@ body>.connection-warning{position:sticky;top:0;z-index:110;border-radius:0}dialo
 .receiver-fields,.sender-fields{display:grid;gap:12px;min-width:680px;align-items:end}.receiver-fields{grid-template-columns:1fr 1fr 1.2fr}.sender-fields{grid-template-columns:1.3fr 1.1fr 1fr 1fr}.receiver-fields>label,.sender-fields>label{min-width:0;white-space:nowrap}.form-row-scroll input,.form-row-scroll select{min-width:0;width:100%}.receiver-fields .requester-options{min-width:0;align-self:end;white-space:nowrap}.form-row-scroll [name=requesters]{width:auto;flex:none}
 
 .receiver-help{font-size:11px;color:#8d99aa;margin:-7px 0 15px}
+
+#supplierDeleteDialog{width:min(500px,94vw)}#supplierDeleteDialog p{overflow-wrap:anywhere;line-height:1.7}#supplierDeleteError{color:#a3322b}
+
+#rows .slip-number,#rows .slip-supplier,#rows .slip-kind{white-space:nowrap}#rows .slip-number small,#rows .slip-kind small{display:inline;margin:0 0 0 8px}.tracking-heading{display:flex;align-items:center;gap:6px;white-space:nowrap}td .tracking-link{display:inline-flex;align-items:center;justify-content:center;gap:3px;margin:0;padding:3px 5px;font-size:10px;line-height:1.2;border-radius:5px}td .tracking-link svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;flex:none}

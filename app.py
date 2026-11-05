@@ -10,7 +10,7 @@ from excel_report import add_as_report
 import storage
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '3.3.1'
+APP_VERSION = '3.4.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
@@ -458,6 +458,21 @@ class Handler(BaseHTTPRequestHandler):
                 data = {k: str(v)[:60] for k,v in data.items() if k in ('company', 'companyPhone', 'manager')}
                 with db() as c: c.execute('INSERT OR REPLACE INTO settings VALUES(1,?)',(json.dumps(data,ensure_ascii=False),))
                 return self.send({'ok':True})
+            if path == '/api/suppliers/delete':
+                id = data.get('id')
+                if type(id) is not int or id <= 0 or not isinstance(data.get('name'), str) or not isinstance(data.get('phone'), str):
+                    raise ValueError('삭제할 받는이 정보를 확인하세요.')
+                with db() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    row = c.execute('SELECT name,phone FROM suppliers WHERE id=?', (id,)).fetchone()
+                    if row is None:
+                        return self.send({'error':'이미 삭제되었거나 없는 받는이입니다.'}, status=404)
+                    if tuple(row) != (data['name'], data['phone']):
+                        return self.send({'error':'다른 PC에서 받는이 정보가 변경되었습니다. 목록을 다시 열고 확인하세요.'}, status=409)
+                    c.execute('DELETE FROM suppliers WHERE id=?', (id,))
+                    # Historical slips keep their saved name/phone; do not seed it again.
+                    c.execute("INSERT OR IGNORE INTO app_meta VALUES('suppliers_seeded','1')")
+                return self.send({'ok':True, 'id':id})
             if path == '/api/suppliers':
                 name = str(data.get('name', '')).strip()
                 if not name or len(name) > 60:

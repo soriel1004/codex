@@ -128,11 +128,13 @@ class DesktopSession:
                             return self.send({'error':'프로그램을 종료하고 있습니다.'}, 409)
                         if not session.backup_lock.acquire(blocking=False):
                             return self.send({'error':'백업 저장이 진행 중입니다.'}, 409)
+                    status = 200
                     try:
-                        self.send(session.save_backup())
+                        result = session.save_backup()
                     except (OSError, ValueError) as error:
-                        self.send({'error':str(error)}, 503)
+                        result, status = {'error':str(error)}, 503
                     finally: session.backup_lock.release()
+                    self.send(result, status)
                 elif endpoint in ('/api/program/exit', '/api/program/restart'):
                     restart = endpoint.endswith('/restart')
                     with session.close_lock:

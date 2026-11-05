@@ -237,6 +237,31 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.get('/api/slips')[0]['supplier'], '공급사 A')
         self.assert_error(400, '/api/suppliers', {'name': '변경된 공급사'})
 
+    def test_supplier_delete_preserves_history_does_not_reseed_and_can_edit_old_slip(self):
+        slip = self.create()
+        slip['phone'] = '02-123-4567'
+        slip = self.post('/api/slips', slip)
+        supplier = self.get('/api/suppliers')[0]
+        self.post('/api/suppliers/delete', supplier)
+        self.assertEqual(self.get('/api/suppliers'), [])
+        self.assertEqual(self.get('/api/suppliers'), [])
+        saved = self.get('/api/slips')[0]
+        self.assertEqual(saved['supplier'], '공급사 A')
+        saved['note'] = '삭제된 받는이의 전표 수정'
+        self.assertEqual(self.post('/api/slips', saved)['note'], saved['note'])
+        self.assertEqual(self.get('/api/slips')[0]['phone'], slip.get('phone', ''))
+        fresh = dict(slip); fresh.pop('id'); fresh.pop('number')
+        self.assert_error(400, '/api/slips', fresh)
+        self.assert_error(404, '/api/suppliers/delete', supplier)
+
+    def test_supplier_delete_rejects_stale_details_and_invalid_id(self):
+        supplier = self.get('/api/suppliers')[0]
+        self.post('/api/suppliers', dict(supplier, phone='010-9999-1111'))
+        self.assert_error(409, '/api/suppliers/delete', supplier)
+        self.assertEqual(self.get('/api/suppliers')[0]['phone'], '010-9999-1111')
+        for value in (True, 0, -1, str(supplier['id'])):
+            self.assert_error(400, '/api/suppliers/delete', dict(supplier, id=value))
+
     def test_settings_and_excel_with_item_receipt_fields(self):
         self.assertIn('AS'.encode(), self.req('/'))
         self.post('/api/settings', {'company': '테스트 업체'})

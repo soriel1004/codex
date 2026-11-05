@@ -34,9 +34,10 @@ function trackingUrl(carrier, number) {
 }
 function trackingControl(s) {
   if (s.status === '반환완료') return '';
-  if (!String(s.trackingNumber || '').trim()) return '<button class="tracking-link" disabled title="수정에서 출고 송장번호를 입력하세요">송장번호 미등록</button>';
+  const label = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4.5"></circle><path d="m10 10 4 4"></path></svg><span>조회</span>';
+  if (!String(s.trackingNumber || '').trim()) return `<button class="tracking-link" disabled title="송장번호 미등록 · 수정에서 출고 송장번호를 입력하세요" aria-label="송장번호 미등록">${label}</button>`;
   const url = trackingUrl(trackingCarrier(s.courier), s.trackingNumber);
-  return url ? `<a class="button tracking-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(s.number)} 송장 조회 (새 창)">송장 조회 ↗</a>` : `<button class="tracking-link" data-track="${s.id}">송장 조회</button>`;
+  return url ? `<a class="button tracking-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="송장 조회 (새 창)" aria-label="${esc(s.number)} 송장 조회 (새 창)">${label}</a>` : `<button class="tracking-link" data-track="${s.id}" title="송장 조회 · 택배사 선택" aria-label="송장 조회">${label}</button>`;
 }
 function openTracking(s) {
   if (!/^\d+$/.test(trackingDigits(s.trackingNumber))) return toast('송장번호는 숫자와 하이픈, 공백만 사용할 수 있습니다. 전표 수정에서 확인하세요.');
@@ -234,7 +235,7 @@ function render() {
     ['완료', listStats.completed],
     ['받는이', listStats.suppliers]
   ].map(([label,n],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${slipActions(s)}</td></tr>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td class="slip-number"><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td class="slip-supplier">${esc(s.supplier)}</td><td class="slip-kind">${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td><div class="tracking-heading"><span>${esc(s.courier||'—')}</span>${trackingControl(s)}</div><small>${esc(s.trackingNumber||'—')}</small></td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${slipActions(s)}</td></tr>`).join('');
   $('#pageInfo').textContent = `${pageNumber} / ${pageCount} 페이지 · ${pageTotal}건`;
   $('#previousPage').disabled = pageNumber <= 1;
   $('#nextPage').disabled = pageNumber >= pageCount;
@@ -463,15 +464,32 @@ function matchesManagementSearch(value, query) {
 function renderSuppliers() {
   const filtered = suppliers.filter(s => matchesManagementSearch(`${s.name} ${s.phone}`, $('#supplierSearch').value));
   $('#supplierSearchCount').textContent = `${filtered.length} / ${suppliers.length}개`;
-  $('#supplierRows').innerHTML = filtered.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td><button data-supplier-edit="${s.id}">수정</button></td></tr>`).join('') ||
+  $('#supplierRows').innerHTML = filtered.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td><button data-supplier-edit="${s.id}">수정</button> <button data-supplier-delete="${s.id}" class="delete-button">삭제</button></td></tr>`).join('') ||
     `<tr><td colspan="3">${suppliers.length ? '검색 결과가 없습니다.' : '등록된 받는이가 없습니다. 위에서 등록하세요.'}</td></tr>`;
 }
 $('#supplierSearch').oninput = renderSuppliers;
 $('#suppliersBtn').onclick = async () => {
   try { suppliers = await api('/api/suppliers'); } catch (error) { return toast(error.message); }
-  $('#supplierForm').reset(); $('#supplierSearch').value = ''; renderSuppliers(); $('#suppliers').showModal();
+  $('#supplierForm').reset(); $('#supplierForm [name=id]').value = ''; $('#supplierSearch').value = ''; renderSuppliers(); $('#suppliers').showModal();
 };
-$('#supplierReset').onclick = () => { $('#supplierForm').reset(); $('#supplierForm [name=id]').value = ''; };
+let deletingSupplier = null;
+$('#supplierDeleteConfirm').onclick = async () => {
+  if (!deletingSupplier) return;
+  const supplier = deletingSupplier;
+  const button = $('#supplierDeleteConfirm'); button.disabled = true;
+  try {
+    await api('/api/suppliers/delete', supplier);
+    const id = supplier.id;
+    $('#supplierDeleteDialog').close();
+    if ($('#supplierForm [name=id]').value === String(id)) {
+      $('#supplierForm').reset(); $('#supplierForm [name=id]').value = '';
+    }
+    suppliers = await api('/api/suppliers');
+    renderSuppliers(); await reload(); toast('받는이를 삭제했습니다. 기존 전표는 유지됩니다.');
+  } catch (error) { if ($('#supplierDeleteDialog').open) $('#supplierDeleteError').textContent = error.message; else toast(error.message); }
+  finally { button.disabled = false; }
+};
+$('#supplierDeleteDialog').addEventListener('close', () => { deletingSupplier = null; });
 $('#supplierForm').onsubmit = async e => {
   e.preventDefault(); const btn = e.submitter; btn.disabled = true;
   try {
@@ -642,6 +660,15 @@ document.addEventListener('click', async e => {
   if (b.dataset.supplierEdit) {
     const supplier = suppliers.find(s => s.id === Number(b.dataset.supplierEdit));
     for (const [k,v] of Object.entries(supplier)) if ($('#supplierForm').elements.namedItem(k)) $('#supplierForm').elements.namedItem(k).value = v;
+  }
+  if (b.dataset.supplierDelete) {
+    const supplier = suppliers.find(s => s.id === Number(b.dataset.supplierDelete));
+    if (!supplier) return;
+    deletingSupplier = {...supplier};
+    $('#supplierDeleteName').textContent = supplier.name + (supplier.phone ? ' · ' + supplier.phone : '');
+    $('#supplierDeleteError').textContent = '';
+    $('#supplierDeleteDialog').showModal();
+    $('#supplierDeleteCancel').focus();
   }
 });
 $('#search').oninput = () => {
