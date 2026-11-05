@@ -54,7 +54,8 @@ function updateTrackingLink() {
   else $('#trackingOpen').removeAttribute('href');
 }
 $('#trackingCarrier').onchange = updateTrackingLink;
-let appInitialized = false, initializationTask = null;
+let appInitialized = false, initializationTask = null, programExiting = false;
+let programInfo = {nativeBackup:false, canExit:false, server:false};
 let connectionProbe = null, connectionFailures = 0, connectionLost = false, connectedShare = null;
 const connectionWarnings = [document.body, ...document.querySelectorAll('dialog')].map(parent => {
   const warning = document.createElement('aside');
@@ -67,10 +68,12 @@ const connectionWarnings = [document.body, ...document.querySelectorAll('dialog'
   return warning;
 });
 function showConnectionWarning() {
+  if (programExiting) return;
   connectionLost = true;
   connectionWarnings.forEach(warning => { warning.hidden = false; });
 }
 function checkServerConnection() {
+  if (programExiting) return Promise.resolve(false);
   if (connectionProbe) return connectionProbe;
   connectionWarnings.forEach(warning => { warning.querySelector('button').disabled = true; });
   connectionProbe = (async () => {
@@ -119,16 +122,45 @@ function toast(s) {
   $('#toast').classList.add('show');
   setTimeout(() => $('#toast').classList.remove('show'), 3500);
 }
-function completedSerialChanges(s) {
-  if (s.status !== '반환완료') return '';
-  const serials = value => String(value || '').split(/[,，\r\n]+/).map(v => v.trim()).filter(Boolean);
-  const changed = s.items.filter(item => {
-    const outbound = new Set(serials(item.serial));
-    return outbound.size && serials(item.receivedSerial).some(value => !outbound.has(value));
-  });
-  if (!changed.length) return '';
-  return `<details class="serial-changes"><summary><span class="serial-change-badge">시리얼 변경 · ${changed.length}품목</span></summary><div class="serial-change-list">${changed.map(item => `<div class="serial-change-item"><b>${esc(item.name)}</b><span>출고: ${esc(item.serial)}</span><span>입고: ${esc(item.receivedSerial)}</span></div>`).join('')}</div></details>`;
-}
+$('#backupBtn').onclick = async () => {
+  const button = $('#backupBtn');
+  button.disabled = true;
+  let fileHandle = null, writable = null;
+  try {
+    if (programInfo.nativeBackup) {
+      const result = await api('/api/program/backup', {});
+      toast(result.cancelled ? '백업 저장을 취소했습니다.' : '백업 파일을 저장했습니다: ' + result.filename);
+    } else if (window.showSaveFilePicker) {
+      fileHandle = await window.showSaveFilePicker({suggestedName:'AS-backup-' + today() + '.db', types:[{description:'AS 데이터베이스', accept:{'application/octet-stream':['.db']}}]});
+      const response = await fetch('/api/backup');
+      if (!response.ok) throw Error('백업을 받지 못했습니다. 서버 연결을 확인하세요.');
+      writable = await fileHandle.createWritable();
+      await response.body.pipeTo(writable);
+      writable = null;
+      toast('백업 파일을 저장했습니다.');
+    } else $('#backupHelp').showModal();
+  } catch (error) {
+    if (writable) await writable.abort().catch(() => {});
+    if (error.name !== 'AbortError') toast(error.message);
+  } finally { button.disabled = false; }
+};
+$('#exitBtn').onclick = () => {
+  $('#exitMessage').textContent = programInfo.server
+    ? '이 PC의 프로그램과 서버, 커맨드 창을 모두 종료합니다. 다른 PC의 연결도 끊기며, 다른 PC에서 실행 파일을 다시 열면 서버를 이어받습니다.'
+    : '이 PC의 프로그램과 커맨드 창을 종료합니다. 다른 PC의 서버는 계속 동작합니다.';
+  if (!programInfo.canExit) $('#exitMessage').textContent = '주소로 직접 접속한 화면입니다. 프로그램과 커맨드 창을 함께 종료하려면 NAS의 start-windows.bat로 실행하세요.';
+  $('#exitConfirm').disabled = !programInfo.canExit;
+  $('#exitDialog').showModal();
+};
+$('#exitConfirm').onclick = async () => {
+  const button = $('#exitConfirm'); button.disabled = true;
+  try {
+    await api('/api/program/exit', {});
+    programExiting = true;
+    connectionWarnings.forEach(warning => { warning.hidden = true; });
+    $('#exitMessage').textContent = '프로그램을 종료하고 있습니다…';
+  } catch (error) { toast(error.message); button.disabled = false; }
+};
 function elapsedIndicator(s) {
   const label = `${esc(s.elapsedDays)}일`;
   if (s.status === '반환완료') return label;
@@ -166,12 +198,12 @@ function render() {
   $('#count').textContent = pageTotal + '건';
   document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   $('#stats').innerHTML = [
-    ['전체 전표', listStats.total, '누적 접수 내역'],
-    ['진행 중', listStats.active, '부분완료 포함 · 미반환 품목 관리'],
-    ['완료', listStats.completed, '모든 품목이 반환된 전표'],
-    ['받는이', listStats.suppliers, '등록된 AS 처리 업체']
-  ].map(([label,n,sub],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong><p>${sub}</p></article>`).join('');
-  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}${completedSerialChanges(s)}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${slipActions(s)}</td></tr>`).join('');
+    ['전체 전표', listStats.total],
+    ['진행 중', listStats.active],
+    ['완료', listStats.completed],
+    ['받는이', listStats.suppliers]
+  ].map(([label,n],i) => `<article><div>${label}<span class="stat-icon">${['▤','↗','✓','▦'][i]}</span></div><strong>${n}<small>${i===3?'개사':'건'}</small></strong></article>`).join('');
+  $('#rows').innerHTML = filtered.map(s => `<tr><td><strong>${esc(s.number)}</strong><small>${esc(s.date)}</small></td><td>${esc(s.supplier)}</td><td>${esc(s.kind)}${s.requesters.length ? `<small>${esc(s.requesters.join(' · '))}</small>` : ''}</td><td>${esc(s.items[0].name)}${s.items.length>1?` 외 ${s.items.length-1}건`:''}</td><td>${esc(s.courier||'—')}<small>${esc(s.trackingNumber||'—')}</small>${trackingControl(s)}</td><td><b>${total(s,'returnedQty')}</b> / ${total(s,'qty')}<small>미반환 ${total(s,'remainingQty')}</small></td><td><span class="badge b${['접수','발송','처리중','반환완료','부분반환'].indexOf(s.status)}">${esc(statusLabel(s.status))}</span></td><td>${elapsedIndicator(s)}<small>${s.status === '반환완료' ? '반환까지' : '진행 중'}</small></td><td>${esc(s.result||'—')}<small>${esc(s.returned||'—')}</small></td><td class="row-actions">${slipActions(s)}</td></tr>`).join('');
   $('#pageInfo').textContent = `${pageNumber} / ${pageCount} 페이지 · ${pageTotal}건`;
   $('#previousPage').disabled = pageNumber <= 1;
   $('#nextPage').disabled = pageNumber >= pageCount;
@@ -235,7 +267,7 @@ function itemRow(i = {}) {
   tr.dataset.rowKey = 'editor-item-' + (++editorRowSequence);
   tr.dataset.sourceIndex = Number.isInteger(i.sourceIndex) ? i.sourceIndex : '';
   tr.innerHTML = `<td><input data-key="name" aria-label="품명" list="productNames" maxlength="120" placeholder="목록에서 선택 또는 직접 입력" value="${esc(i.name||'')}" required></td>` +
-    ['productionMonth','serial','qrCodeNumber','qty','fault'].map(k => `<td data-cell="${k}" ${k==='qrCodeNumber'?'data-gn-qr hidden':''}><input data-key="${k}" aria-label="${({productionMonth:'생산 년월',serial:'출고 시리얼번호',qrCodeNumber:'QR코드번호',qty:'수량',fault:'불량 증상'})[k]}" ${['serial','qrCodeNumber'].includes(k)?'autocomplete="off" spellcheck="false" enterkeyhint="next"':''} ${k==='productionMonth'?'type="month"':k==='qty'?'type="number" min="1" max="99999" required':'maxlength="'+(k==='qrCodeNumber'?500:k==='fault'?70:40)+'"'} value="${esc(i[k]??(k==='qty'?1:''))}"></td>`).join('') +
+    ['productionMonth','serial','qrCodeNumber','qty','fault','note'].map(k => `<td data-cell="${k}" ${k==='qrCodeNumber'?'data-gn-qr hidden':''}><input data-key="${k}" aria-label="${({productionMonth:'생산 년월',serial:'출고 시리얼번호',qrCodeNumber:'QR코드번호',qty:'수량',fault:'불량 증상',note:'품목 비고'})[k]}" ${['serial','qrCodeNumber'].includes(k)?'autocomplete="off" spellcheck="false" enterkeyhint="next"':''} ${k==='productionMonth'?'type="month"':k==='qty'?'type="number" min="1" max="99999" required':'maxlength="'+(['qrCodeNumber','note'].includes(k)?500:k==='fault'?70:40)+'"'} value="${esc(i[k]??(k==='qty'?1:''))}"></td>`).join('') +
     '<td><button type="button" class="remove" aria-label="품목 삭제">×</button></td>';
   tr.querySelector('.remove').onclick = () => {
     if ($('#items').children.length > 1) {
@@ -680,6 +712,7 @@ function initializeApp() {
   })();
   return initializationTask;
 }
+api('/api/program').then(info => { programInfo = info; }).catch(() => {});
 checkServerConnection();
 setInterval(checkServerConnection, 5000);
 window.addEventListener('online', checkServerConnection);

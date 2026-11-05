@@ -450,9 +450,17 @@ def run(root, import_initial=None, local_base=None, open_browser=True):
         url = client_url(root,try_claim=coordinator.claim)
         if url is not None:
             print('기존 서버에 클라이언트로 접속:',url,flush=True)
-            if open_browser: app.open_program_window(url)
+            if open_browser and os.name == 'nt':
+                from desktop_session import DesktopSession
+                desktop = DesktopSession(url)
+                try:
+                    desktop.start()
+                    desktop.wait()
+                finally: desktop.close()
+            elif open_browser: app.open_program_window(url)
             return 'client'
     server = None
+    desktop = None
     try:
         coordinator.prepare(import_initial)
         port = int(os.environ.get('AS_AUTO_PORT','8000'))
@@ -462,8 +470,16 @@ def run(root, import_initial=None, local_base=None, open_browser=True):
         os.environ['PORT']=str(server.server_port)
         os.environ['AS_BACKUP_DIR']=str(Path(root)/'backups')
         print('서버 준비 완료. 서버 창을 종료하면 다른 PC에서 다음 실행 시 인계합니다.',flush=True)
-        app.main(prepared_server=server,on_ready=coordinator.ready,open_browser=open_browser)
+        def ready(port):
+            nonlocal desktop
+            coordinator.ready(port)
+            if open_browser and os.name == 'nt':
+                from desktop_session import DesktopSession
+                desktop = DesktopSession(f'http://127.0.0.1:{port}',on_exit=server.shutdown)
+                desktop.start()
+        app.main(prepared_server=server,on_ready=ready,open_browser=open_browser and os.name != 'nt')
         return 'server'
     finally:
+        if desktop: desktop.close()
         if server: server.server_close()
         coordinator.close()

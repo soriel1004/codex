@@ -87,7 +87,7 @@ def search_values(record):
         'outboundSerial': serials([i.get('serial') for i in items]),
         'receivedSerial': serials([i.get('receivedSerial') for i in items] + [i.get('receivedSerial') for e in events for i in e['items']]),
         'details': [record.get('note'), record.get('result')] +
-            [i.get(key) for i in items for key in ('fault', 'receiptTreatment', 'mbRepairReport')] +
+            [i.get(key) for i in items for key in ('fault', 'receiptTreatment', 'mbRepairReport', 'note')] +
             [e.get(key) for e in events for key in ('result', 'mbRepairReport')],
         'other': [record.get(key) for key in ('date','shippedMonth','courier','phone','company','companyPhone','manager','kind','returned')] +
             [{'부분반환':'부분완료','반환완료':'완료'}.get(record['status'], record['status'])] + record.get('requesters', []) +

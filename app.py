@@ -10,7 +10,7 @@ from excel_report import add_as_report
 import storage
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '3.1.0'
+APP_VERSION = '3.2.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
@@ -61,6 +61,7 @@ def normalize(r):
         item.pop('model', None)
         item.setdefault('productionMonth', '')
         item.setdefault('qrCodeNumber', '')
+        item.setdefault('note', '')
         item['sourceIndex'] = i
         item['receivedSerial'] = '\n'.join(x.get('receivedSerial', '') for event in r['returns'] for x in event['items'] if x['index'] == i and x.get('receivedSerial'))
         item['mbRepairReport'] = '\n'.join(event['mbRepairReport'] for event in r['returns']
@@ -280,7 +281,7 @@ def xlsx(rows):
                 r['number'], r['date'], r.get('shippedMonth', ''),
                 r.get('courier', ''), r.get('trackingNumber', ''), ' · '.join(r.get('requesters', [])),
                 r['supplier'], r.get('company', ''), item.get('name', ''), item.get('productionMonth', ''),
-                item.get('serial', ''), item.get('receivedSerial', ''), r.get('note', ''), item.get('mbRepairReport', ''), item.get('qrCodeNumber', ''), item.get('qty', 1),
+                item.get('serial', ''), item.get('receivedSerial', ''), '\n'.join(v for v in (item.get('note', ''), r.get('note', '')) if v), item.get('mbRepairReport', ''), item.get('qrCodeNumber', ''), item.get('qty', 1),
                 item.get('fault', ''), r['kind'], status_label(r['status']), item['returnedQty'],
                 item['remainingQty'], item['elapsedDays'], item.get('receiptTreatment', ''), item.get('receivedDate', '')])
     def col(i):
@@ -384,6 +385,8 @@ class Handler(BaseHTTPRequestHandler):
             if storage.active_sync is not None:
                 health.update(share_id=storage.active_sync.identity['share_id'],leader_token=storage.active_sync.token,server_pc=storage.active_sync.owner('ready')['pc'])
             return self.send(health)
+        if path=='/api/program':
+            return self.send({'nativeBackup':False, 'canExit':False, 'server':False})
         if path=='/api/slips': return self.send(records())
         if path=='/api/receipt-options': return self.send([row['name'] for row in receipt_option_rows()])
         if path=='/api/receipt-options/manage': return self.send(receipt_option_rows())
@@ -537,13 +540,15 @@ class Handler(BaseHTTPRequestHandler):
                             raise ValueError('품명은 120자 이내로 입력하세요.')
                         if not isinstance(item.get('qrCodeNumber', ''), str) or len(item.get('qrCodeNumber', '')) > 500:
                             raise ValueError('QR코드번호는 500자 이내로 입력하세요.')
+                        if not isinstance(item.get('note', ''), str) or len(item.get('note', '')) > 500:
+                            raise ValueError('품목 비고는 500자 이내로 입력하세요.')
                     if data.get('status') not in ('접수','발송','처리중','부분반환','반환완료'):
                         raise ValueError('진행상태가 올바르지 않습니다.')
                     result = dict(old or {})
                     keys = ('date','supplier','phone','company','companyPhone','manager','kind','status','note','shippedDate','trackingNumber','courier')
                     result.update({k: data[k] for k in keys if k in data})
                     result['requesters'] = [name for name in ('GN','대일') if name in requesters]
-                    result['items'] = [{k:v for k,v in item.items() if k in ('name','serial','qty','fault','productionMonth','qrCodeNumber')} for item in items]
+                    result['items'] = [{k:v for k,v in item.items() if k in ('name','serial','qty','fault','productionMonth','qrCodeNumber','note')} for item in items]
                     result['returns'] = editor_returns(old, data, items, c) if old else []
                     result['version'] = old['version'] + 1 if old else 0
                     if not result['returns'] and result['status'] in ('부분반환', '반환완료'):

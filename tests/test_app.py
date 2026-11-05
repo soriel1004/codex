@@ -599,6 +599,28 @@ class Workflow(unittest.TestCase):
         self.assertEqual(s['items'][0]['receivedDate'], '2026-10-20')
         self.assertEqual(s['status'], '반환완료')
 
+    def test_per_item_notes_survive_returns_edits_search_and_excel(self):
+        s = self.create()
+        s['items'][0]['note'] = '=품목 비고 <메모>\n추가 확인'
+        s['items'][1]['note'] = '별도 메모'
+        s['note'] = '전표 전체 비고'
+        s = self.post('/api/slips', s)
+        s = self.ret(s, items=[{'index':0, 'qty':1, 'receivedSerial':'CHANGED-SERIAL'}])
+        self.assertEqual(s['items'][0]['note'], '=품목 비고 <메모>\n추가 확인')
+        s['items'].reverse()
+        s = self.post('/api/slips', s)
+        self.assertEqual(s['items'][2]['note'], '=품목 비고 <메모>\n추가 확인')
+        result = self.get('/api/slips/page?view=all&field=details&q=' + urllib.parse.quote('추가 확인'))
+        self.assertEqual(result['total'], 1)
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as archive:
+            root = ET.fromstring(archive.read('xl/worksheets/sheet1.xml'))
+            ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            rows = [[excel_text(cell, ns) for cell in row] for row in root.findall('s:sheetData/s:row', ns)]
+            note = rows[0].index('비고')
+            self.assertEqual(rows[3][note], '=품목 비고 <메모>\n추가 확인\n전표 전체 비고')
+        s['items'][0]['note'] = 'x' * 501
+        self.assert_error(400, '/api/slips', s)
+
     def test_mb_report_partial_full_returns_history_correction_and_excel(self):
         s = self.create()
         s['note'] = '=비고 <기록>\n둘째 줄'
