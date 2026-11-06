@@ -55,7 +55,7 @@ function updateTrackingLink() {
   else $('#trackingOpen').removeAttribute('href');
 }
 $('#trackingCarrier').onchange = updateTrackingLink;
-let appInitialized = false, initializationTask = null, programExiting = false;
+let appInitialized = false, initializationTask = null, programExiting = false, restoreBusy = false;
 let programInfo = {nativeBackup:false, canExit:false, canRestart:false, server:false};
 let disconnectPromptShown = false, programActionPending = false;
 let connectionProbe = null, connectionFailures = 0, connectionLost = false, connectedShare = null;
@@ -70,7 +70,7 @@ const connectionWarnings = [document.body, ...document.querySelectorAll('dialog:
   return warning;
 });
 function showConnectionWarning() {
-  if (programExiting) return;
+  if (programExiting || restoreBusy) return;
   connectionLost = true;
   connectionWarnings.forEach(warning => { warning.hidden = false; });
   openDisconnectionDialog();
@@ -103,7 +103,7 @@ async function disconnectedAction(restart) {
 $('#connectionExit').onclick = () => disconnectedAction(false);
 $('#connectionRestart').onclick = () => disconnectedAction(true);
 function checkServerConnection() {
-  if (programExiting) return Promise.resolve(false);
+  if (programExiting || restoreBusy) return Promise.resolve(false);
   if (connectionProbe) return connectionProbe;
   connectionWarnings.forEach(warning => { warning.querySelector('button').disabled = true; });
   connectionProbe = (async () => {
@@ -154,14 +154,16 @@ function toast(s) {
   $('#toast').classList.add('show');
   setTimeout(() => $('#toast').classList.remove('show'), 3500);
 }
-$('#backupBtn').onclick = async () => {
-  const button = $('#backupBtn');
+$('#backupBtn').onclick = () => $('#backupDialog').showModal();
+$('#saveBackupBtn').onclick = async () => {
+  const button = $('#saveBackupBtn');
   button.disabled = true;
   let fileHandle = null, writable = null;
   try {
     if (programInfo.nativeBackup) {
       const result = await api('/api/program/backup', {});
-      toast(result.cancelled ? '백업 저장을 취소했습니다.' : '백업 파일을 저장했습니다: ' + result.filename);
+      const message = result.cancelled ? '백업 저장을 취소했습니다.' : '백업 파일을 저장했습니다: ' + result.filename;
+      $('#backupMessage').textContent = message; toast(message);
     } else if (window.showSaveFilePicker) {
       fileHandle = await window.showSaveFilePicker({suggestedName:'AS-backup-' + today() + '.db', types:[{description:'AS 데이터베이스', accept:{'application/octet-stream':['.db']}}]});
       const response = await fetch('/api/backup');
@@ -169,12 +171,62 @@ $('#backupBtn').onclick = async () => {
       writable = await fileHandle.createWritable();
       await response.body.pipeTo(writable);
       writable = null;
-      toast('백업 파일을 저장했습니다.');
+      $('#backupMessage').textContent = '백업 파일을 저장했습니다.'; toast('백업 파일을 저장했습니다.');
     } else $('#backupHelp').showModal();
   } catch (error) {
     if (writable) await writable.abort().catch(() => {});
-    if (error.name !== 'AbortError') toast(error.message);
+    if (error.name !== 'AbortError') { $('#backupMessage').textContent = error.message; toast(error.message); }
   } finally { button.disabled = false; }
+};
+let preparedRestore = null;
+function restoreControls(busy) {
+  restoreBusy = busy;
+  $('#restoreFile').disabled = $('#saveBackupBtn').disabled = busy;
+  $('#backupDialog').querySelectorAll('[data-close]').forEach(button => { button.disabled = busy; });
+  $('#restoreAgree').disabled = busy || !preparedRestore;
+  $('#restoreConfirm').disabled = busy || !preparedRestore || !$('#restoreAgree').checked;
+}
+$('#backupDialog').addEventListener('cancel', event => { if (restoreBusy) event.preventDefault(); });
+$('#restoreAgree').onchange = () => restoreControls(false);
+$('#restoreFile').onchange = async () => {
+  preparedRestore = null;
+  $('#restoreAgree').checked = false;
+  $('#restoreSummary').hidden = true;
+  $('#restoreSafetyDownload').hidden = true;
+  const file = $('#restoreFile').files[0];
+  if (!file) return restoreControls(false);
+  if (file.size < 16 || file.size > 512*1024*1024) { $('#restoreMessage').textContent = '512MB 이하의 AS 백업(.db)을 선택하세요.'; return restoreControls(false); }
+  restoreControls(true); $('#restoreMessage').textContent = '백업 파일을 검사하고 있습니다…';
+  try {
+    const response = await fetch('/api/restore/preview',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || '백업 파일을 검사하지 못했습니다.');
+    preparedRestore = result;
+    const b = result.backup, c = result.current;
+    $('#restoreSummary').innerHTML = `<strong>${esc(file.name)}</strong><p>복원할 자료: 전표 ${b.slips}건 · 받는이 ${b.suppliers}개 · 품명 ${b.products}개 · 입고처리 ${b.receipt_options}개</p><p>접수일: ${esc(b.firstDate||'—')} ~ ${esc(b.lastDate||'—')}</p><p>현재 자료: 전표 ${c.slips}건 · 받는이 ${c.suppliers}개 · 품명 ${c.products}개</p>`;
+    $('#restoreSummary').hidden = false;
+    $('#restoreMessage').textContent = '검사가 완료되었습니다. 내용을 확인하고 동의 후 복원하세요.';
+  } catch (error) { $('#restoreMessage').textContent = error.message; }
+  finally { restoreControls(false); }
+};
+$('#restoreConfirm').onclick = async () => {
+  if (!preparedRestore || !$('#restoreAgree').checked || restoreBusy) return;
+  restoreControls(true); $('#restoreMessage').textContent = '현재 자료를 안전하게 백업하고 복원하는 중입니다. 잠시 기다려 주세요…';
+  try {
+    const result = await api('/api/restore/commit',{token:preparedRestore.token,confirmed:true});
+    preparedRestore = null; $('#restoreAgree').checked = false; $('#restoreFile').value = '';
+    $('#restoreMessage').textContent = `복원 완료: 전표 ${result.restored.slips}건. 복원 직전 자료는 ${result.safetyBackup}에 보관했습니다.`;
+    $('#restoreSafetyDownload').href = '/api/restore/safety?name=' + encodeURIComponent(result.safetyBackup);
+    $('#restoreSafetyDownload').hidden = false;
+    $('#restoreSummary').hidden = true;
+    view = 'all'; $('#search').value = ''; $('#searchField').value = 'all';
+    $('#statusFilter').value = ''; $('#requesterFilter').value = '';
+    [settings,suppliers,products,receiptOptions] = await Promise.all(['/api/settings','/api/suppliers','/api/products','/api/receipt-options'].map(path => api(path)));
+    pageNumber = 1; await reload();
+  } catch (error) {
+    preparedRestore = null; $('#restoreAgree').checked = false;
+    $('#restoreMessage').textContent = error.message + ' 저장 결과를 확인하고 백업 파일을 다시 선택하세요.';
+  } finally { restoreControls(false); }
 };
 $('#exitBtn').onclick = () => {
   $('#exitMessage').textContent = programInfo.server

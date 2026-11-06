@@ -8,9 +8,10 @@ from urllib.request import urlopen
 from xml.sax.saxutils import escape
 from excel_report import add_as_report
 import storage
+import backup_restore
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '3.5.0'
+APP_VERSION = '3.6.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
@@ -380,6 +381,21 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 backup.unlink(missing_ok=True)
             return
+        if path=='/api/restore/safety':
+            name = parse_qs(urlparse(self.path).query).get('name',[''])[0]
+            if not re.fullmatch(r'before-restore-\d{8}-\d{6}-[0-9a-f]{8}\.db',name):
+                raise ValueError('복원 직전 백업 파일명을 확인하세요.')
+            backup = DATA/'backups'/name
+            if not backup.is_file(): backup = Path(os.environ.get('AS_BACKUP_DIR',str(DATA/'backups')))/name
+            if not backup.is_file(): return self.send({'error':'복원 직전 백업 파일을 찾지 못했습니다.'},status=404)
+            self.send_response(200)
+            self.send_header('Content-Type','application/octet-stream')
+            self.send_header('Content-Length',str(backup.stat().st_size))
+            self.send_header('Content-Disposition',f'attachment; filename="{name}"')
+            self.send_header('Cache-Control','no-store'); self.end_headers()
+            with backup.open('rb') as source:
+                while chunk := source.read(65536): self.wfile.write(chunk)
+            return
         if path=='/api/health':
             health = {'ok':True,'version':APP_VERSION,'instance':data_instance()}
             if storage.active_sync is not None:
@@ -409,12 +425,20 @@ class Handler(BaseHTTPRequestHandler):
             origin = self.headers.get('Origin')
             if origin and urlparse(origin).netloc.casefold() != self.headers.get('Host','').casefold():
                 return self.send({'error':'프로그램을 연 서버 주소에서만 저장할 수 있습니다.'},status=403)
+            path=urlparse(self.path).path
+            if path == '/api/restore/preview':
+                if self.headers.get('Content-Type','').split(';')[0].strip().lower() != 'application/octet-stream':
+                    return self.send({'error':'AS 백업 파일(.db)을 선택하세요.'},status=415)
+                return self.send(backup_restore.stage(self.rfile,int(self.headers.get('Content-Length',0))))
             if self.headers.get('Content-Type','').split(';')[0].strip().lower() != 'application/json':
                 return self.send({'error':'JSON 형식으로 요청하세요.'},status=415)
             length=int(self.headers.get('Content-Length',0))
             if length < 0 or length>200000: raise ValueError('입력 내용이 너무 큽니다.')
             data=json.loads(self.rfile.read(length))
             path=urlparse(self.path).path
+            if path == '/api/restore/commit':
+                if data.get('confirmed') is not True: raise ValueError('백업 내용 확인 후 복원 동의에 체크하세요.')
+                return self.send(backup_restore.commit(data.get('token')))
             if path == '/api/slips/delete':
                 id, version = data.get('id'), data.get('version')
                 if type(id) is not int or id <= 0 or type(version) is not int or version < 0:
@@ -584,8 +608,13 @@ class Handler(BaseHTTPRequestHandler):
                 storage.save_record(c, id, result)
             return self.send(dict(result, id=id))
         except storage.SharedStoreError as error: return self.send({'error':str(error)},status=503)
+        except backup_restore.RestoreConflict as error: return self.send({'error':str(error)},status=409)
         except (ValueError,TypeError,KeyError,AttributeError) as e: return self.send({'error':str(e)},status=400)
         except sqlite3.OperationalError as error: return self.database_error(error)
+        except (BrokenPipeError,ConnectionResetError): pass
+        except OSError as error:
+            self.log_error('Backup/restore file operation: %s',error)
+            return self.send({'error':'백업 또는 복원 파일을 저장하지 못했습니다. 저장 공간과 폴더 권한을 확인하세요.'},status=503)
 
 def windows_browser_command(url):
     import winreg

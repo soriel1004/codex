@@ -4,6 +4,7 @@ The NAS database server remains the only writer. Each Windows launcher owns its
 gateway and isolated browser process, so a client's Exit cannot stop another PC.
 """
 import json
+import http.client
 import os
 import secrets
 import shutil
@@ -113,6 +114,17 @@ class DesktopSession:
 
             def do_POST(self):
                 if not self.authorized(): return
+                if urlparse(self.path).path == '/api/restore/preview':
+                    import backup_restore
+                    try: length = int(self.headers.get('Content-Length','0'))
+                    except ValueError: length = 0
+                    if self.headers.get('Content-Type','').split(';')[0] != 'application/octet-stream' or not 16 <= length <= backup_restore.MAX_UPLOAD:
+                        return self.send({'error':'512MB 이하의 AS 백업 파일(.db)을 선택하세요.'},400)
+                    if not session.backup_lock.acquire(blocking=False):
+                        return self.send({'error':'백업 또는 복원 작업이 진행 중입니다.'},409)
+                    try: self.upload_backup(length)
+                    finally: session.backup_lock.release()
+                    return
                 if self.headers.get('Content-Type', '').split(';')[0].strip().lower() != 'application/json':
                     return self.send({'error':'JSON 형식으로 요청하세요.'}, 415)
                 try:
@@ -149,7 +161,37 @@ class DesktopSession:
                     self.send({'ok':True})
                     threading.Thread(target=session.close, daemon=True).start()
                 else:
-                    self.proxy(body)
+                    if endpoint == '/api/restore/commit':
+                        if not session.backup_lock.acquire(blocking=False):
+                            return self.send({'error':'백업 또는 복원 작업이 진행 중입니다.'},409)
+                        try: self.proxy(body)
+                        finally: session.backup_lock.release()
+                    else: self.proxy(body)
+
+            def upload_backup(self, length):
+                backend = urlparse(session.backend)
+                connection = http.client.HTTPConnection(backend.hostname,backend.port or 80,timeout=900)
+                started = False
+                try:
+                    connection.putrequest('POST','/api/restore/preview')
+                    connection.putheader('Content-Type','application/octet-stream')
+                    connection.putheader('Content-Length',str(length))
+                    connection.putheader('Origin',session.backend)
+                    connection.endheaders()
+                    remaining = length
+                    while remaining:
+                        chunk = self.rfile.read(min(65536,remaining))
+                        if not chunk: raise OSError('백업 파일 전송이 중단되었습니다.')
+                        connection.send(chunk); remaining -= len(chunk)
+                    response = connection.getresponse()
+                    self.send_response(response.status)
+                    for name in ('Content-Type','Content-Length'):
+                        if response.getheader(name): self.send_header(name,response.getheader(name))
+                    self.send_header('Cache-Control','no-store'); self.end_headers(); started = True
+                    shutil.copyfileobj(response,self.wfile,65536)
+                except (OSError,http.client.HTTPException):
+                    if not started: self.send({'error':'백업 파일을 서버로 전달하지 못했습니다. 연결을 확인하세요.'},503)
+                finally: connection.close()
 
             def proxy(self, body=None):
                 # Fixed upstream; never accept a destination host from a browser request.
@@ -161,7 +203,7 @@ class DesktopSession:
                 request = Request(session.backend + self.path, data=body, headers=headers)
                 started = False
                 try:
-                    try: response = build_opener(ProxyHandler({})).open(request, timeout=2 if parsed.path == '/api/health' else 120)
+                    try: response = build_opener(ProxyHandler({})).open(request, timeout=2 if parsed.path == '/api/health' else 900 if parsed.path == '/api/restore/commit' else 120)
                     except HTTPError as error: response = error
                     with response:
                         self.send_response(response.status)

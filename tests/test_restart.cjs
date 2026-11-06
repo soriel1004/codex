@@ -13,7 +13,7 @@ const {once} = require('node:events');
   const install = path.join(temp, 'NAS'), harness = path.join(temp, 'harness');
   fs.mkdirSync(install); fs.mkdirSync(harness);
   const root = path.resolve(__dirname, '..');
-  for (const file of ['app.py','auto_server.py','desktop_session.py','launcher.py','storage.py','excel_report.py']) fs.copyFileSync(path.join(root,file),path.join(install,file));
+  for (const file of ['app.py','auto_server.py','desktop_session.py','launcher.py','storage.py','excel_report.py','backup_restore.py']) fs.copyFileSync(path.join(root,file),path.join(install,file));
   fs.cpSync(path.join(root,'static'),path.join(install,'static'),{recursive:true});
   fs.writeFileSync(path.join(harness,'sitecustomize.py'), `import os, json, auto_server, desktop_session
 class WindowsBranch:

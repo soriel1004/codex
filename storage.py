@@ -194,6 +194,12 @@ def _initialise(c, path, normalise):
             for slip_id, body in c.execute('SELECT id,body FROM slips').fetchall():
                 save_record(c, slip_id, normalise(json.loads(body)))
             c.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+        for table in ('slips','suppliers','products','receipt_options'):
+            marker = c.execute('SELECT value FROM app_meta WHERE key=?',('restore_sequence:'+table,)).fetchone()
+            if marker and str(marker[0]).isdigit():
+                current = c.execute('SELECT seq FROM sqlite_sequence WHERE name=?',(table,)).fetchone()
+                if current: c.execute('UPDATE sqlite_sequence SET seq=MAX(seq,?) WHERE name=?',(int(marker[0]),table))
+                else: c.execute('INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)',(table,int(marker[0])))
         c.commit()
     except BaseException:
         c.rollback()
