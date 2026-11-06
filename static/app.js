@@ -645,15 +645,32 @@ function openReturn(s, all = false) {
         <div class="return-counts">발송 ${i.qty} · 반환 완료 ${i.returnedQty} · <b>미반환 ${i.remainingQty}</b></div>
         <label class="return-quantity">이번 반환 수량 <input type="number" aria-label="${esc(i.name)} 이번 반환 수량" min="1" max="${i.remainingQty}" value="${i.remainingQty||0}" ${selected ? '' : 'disabled'} ${all ? 'readonly' : ''}></label>
       </td>
-      <td class="return-serial-cell"><label>입고 시리얼번호 (교환품)<textarea class="received-serial" aria-label="${esc(i.name)} 입고 시리얼번호" maxlength="400" rows="3" placeholder="교환된 제품의 시리얼을 입력하세요" ${i.remainingQty ? '' : 'disabled'}></textarea></label><small>${i.remainingQty ? '여러 개는 쉼표 또는 줄바꿈으로 구분 · 수리 후 동일 제품이면 비워 두세요.' : '반환 완료된 품목입니다. 아래 반환 이력에서 입고 시리얼을 수정하세요.'}</small></td>
+      <td class="return-serial-cell"><label class="serial-replacement-choice"><input type="checkbox" data-serial-replacement aria-label="${esc(i.name)} 시리얼 교체" ${i.remainingQty ? '' : 'disabled'}>시리얼 교체</label><div class="return-serial-entry" hidden><label>변경된 입고 시리얼번호<textarea class="received-serial" aria-label="${esc(i.name)} 입고 시리얼번호" maxlength="400" rows="3" placeholder="교체된 제품의 시리얼을 입력하세요" disabled></textarea></label><small>여러 개는 쉼표 또는 줄바꿈으로 구분하세요.</small></div></td>
     </tr>`;
   }).join('');
-  $('#returnItems').querySelectorAll('input[type=checkbox]').forEach(c => c.onchange = () => {
+  const syncSerialEntry = row => {
+    const replacement = row.querySelector('[data-serial-replacement]');
+    row.querySelector('.return-serial-entry').hidden = !replacement.checked;
+    row.querySelector('textarea').disabled = !replacement.checked;
+    row.querySelector('.return-serial-cell').classList.toggle('serial-replacement-active',replacement.checked);
+  };
+  $('#returnItems').querySelectorAll('.return-item-choice input').forEach(c => c.onchange = () => {
     c.closest('tr').querySelector('input[type=number]').disabled = !c.checked;
+    if (!c.checked) c.closest('tr').querySelector('[data-serial-replacement]').checked = false;
+    syncSerialEntry(c.closest('tr'));
+  });
+  $('#returnItems').querySelectorAll('[data-serial-replacement]').forEach(c => {
+    c.onchange = () => {
+      const row = c.closest('tr'), selected = row.querySelector('.return-item-choice input');
+      if (c.checked && !selected.disabled) { selected.checked = true; selected.onchange(); }
+      syncSerialEntry(row);
+      if (c.checked) row.querySelector('textarea').focus({preventScroll:true});
+    };
+    c.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); c.click(); } };
   });
   // Typing a replacement serial also selects that row for a partial return.
-  $('#returnItems').querySelectorAll('textarea:not(:disabled)').forEach(input => input.oninput = () => {
-    const row = input.closest('tr'), checkbox = row.querySelector('[type=checkbox]');
+  $('#returnItems').querySelectorAll('textarea').forEach(input => input.oninput = () => {
+    const row = input.closest('tr'), checkbox = row.querySelector('.return-item-choice input');
     if (!checkbox.disabled && input.value.trim()) { checkbox.checked = true; checkbox.onchange(); }
   });
   renderReturnHistory(s);
@@ -662,14 +679,14 @@ function openReturn(s, all = false) {
   form.elements.date.disabled = done; form.elements.result.disabled = done; form.elements.mbRepairReport.disabled = done;
   $('#returnDialog').showModal();
   $('#returnDialog').scrollTop = 0;
-  if (!done) $('#returnItems textarea:not(:disabled)')?.focus({preventScroll:true});
+  if (!done) $('#returnItems [data-serial-replacement]:not(:disabled)')?.focus({preventScroll:true});
 }
 function renderReturnHistory(s) {
   $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><b>${esc(event.date)}</b>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label>`).join('')}<label class="mb-report-field">M/B 수리내역서 작성<textarea data-history-report maxlength="2000" rows="3" placeholder="이 반환 이력의 M/B 수리 내용 (선택 사항)">${esc(event.mbRepairReport||'')}</textarea></label><div class="history-heading history-bottom"><label>입고처리<select data-history-result>${receiptOptionsHtml(event.result||'')}</select></label><span>입고일 ${esc(event.date)}</span><button type="button" data-save-serials="${eventIndex}">입고정보 저장</button></div></div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
 }
 $('#selectRemaining').onclick = () => {
-  $('#returnItems').querySelectorAll('input[type=checkbox]:not(:disabled)').forEach(c => {
-    c.checked = true; const n = c.closest('tr').querySelector('input[type=number]'); n.disabled = false; n.value = n.max; c.closest('tr').querySelector('textarea').disabled = false;
+  $('#returnItems').querySelectorAll('.return-item-choice input:not(:disabled)').forEach(c => {
+    c.checked = true; const n = c.closest('tr').querySelector('input[type=number]'); n.value = n.max; c.onchange();
   });
 };
 async function saveReturn(s, data) {
@@ -679,7 +696,7 @@ async function saveReturn(s, data) {
 }
 $('#returnForm').onsubmit = async e => {
   e.preventDefault();
-  const items = [...$('#returnItems').querySelectorAll('tr')].filter(tr => tr.querySelector('[type=checkbox]').checked).map(tr => ({index:Number(tr.dataset.index), qty:Number(tr.querySelector('[type=number]').value), receivedSerial:tr.querySelector('textarea').value}));
+  const items = [...$('#returnItems').querySelectorAll('tr')].filter(tr => tr.querySelector('.return-item-choice input').checked).map(tr => ({index:Number(tr.dataset.index), qty:Number(tr.querySelector('[type=number]').value), receivedSerial:tr.querySelector('[data-serial-replacement]').checked ? tr.querySelector('textarea').value : ''}));
   if (!items.length) return toast('반환할 품목을 선택하세요.');
   const btn = e.submitter; btn.disabled = true;
   try { await saveReturn(returning, {date:e.target.elements.date.value, result:e.target.elements.result.value, mbRepairReport:e.target.elements.mbRepairReport.value, items}); $('#returnDialog').close(); }
