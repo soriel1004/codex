@@ -69,7 +69,7 @@ def analyse(rows, as_of):
                     groups[label]['days'] += qty * days
                 ledger.append([slip['number'], slip['date'], month, slip['supplier'], requester,
                                item.get('name',''), item.get('serial',''), entry.get('receivedSerial',''), qty,
-                               event.get('result',''), event['date'], entry_month, days, event.get('mbRepairReport','')])
+                               event.get('result',''), event['date'], entry_month, days, event.get('mbRepairReport',''), entry.get('repairContent','')])
         age = max(0, (as_of - start).days)
         band = 0 if age <= 7 else 1 if age <= 14 else 2 if age <= 21 else 3 if age <= 28 else 4
         for index,item in enumerate(slip['items']):
@@ -225,7 +225,7 @@ def add_as_report(original, records, as_of, version):
         3: sheet(dashboard,[12]*14,merges=merges,overrides=overrides,dashboard=True),
         4: sheet([['월','발송전표수','발송수량','입고수량','월말 미입고수량','평균 입고 소요일','28일 초과 입고수량'],*months],[16,16,16,16,21,23,24],numeric=(2,3,4,5,7),decimal=(6,)),
         5: sheet([['분류','업체','전표수','발송수량','입고수량','미입고수량','평균 입고 소요일','28일 초과 미입고수량'],*report['groups']],[16,30,14,16,16,18,24,26],numeric=(3,4,5,6,8),decimal=(7,)),
-        6: sheet([['전표번호','접수일 (출고일)','출고월','받는이','의뢰업체','품명','출고 시리얼번호','입고 시리얼번호','입고수량','입고처리','입고일','입고월','발송~입고 경과일수','M/B 수리내역서 작성'],*report['ledger']],[22,20,15,25,18,32,28,32,14,22,20,15,24,45],numeric=(9,13))
+        6: sheet([['전표번호','접수일 (출고일)','출고월','받는이','의뢰업체','품명','출고 시리얼번호','입고 시리얼번호','입고수량','입고처리','입고일','입고월','발송~입고 경과일수','M/B 수리내역서 작성','처리내용(수리내용)'],*report['ledger']],[22,20,15,25,18,32,28,32,14,22,20,15,24,45,45],numeric=(9,13))
     }
     recent = months[-24:]
     start, end = len(months)-len(recent)+2, len(months)+1

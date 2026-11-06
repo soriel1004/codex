@@ -605,7 +605,7 @@ class Workflow(unittest.TestCase):
             self.assertEqual(second['입고일'], '2026-10-21')
             self.assertIsNone(pending['입고일'])
             validation = root.find('s:dataValidations/s:dataValidation', ns)
-            self.assertEqual(validation.attrib['sqref'], 'W2:W4')
+            self.assertEqual(validation.attrib['sqref'], 'X2:X4')
             self.assertEqual(validation.attrib['type'], 'list')
             self.assertEqual(validation.find('s:formula1', ns).text, 'ReceiptOptions')
             choices_sheet = ET.fromstring(z.read('xl/worksheets/sheet2.xml'))
@@ -645,6 +645,45 @@ class Workflow(unittest.TestCase):
             self.assertEqual(rows[3][note], '=품목 비고 <메모>\n추가 확인\n전표 전체 비고')
         s['items'][0]['note'] = 'x' * 501
         self.assert_error(400, '/api/slips', s)
+
+    def test_per_item_repairs_remain_separate_through_history_reordering_and_export(self):
+        s = self.create()
+        s = self.ret(s, items=[{'index':0,'qty':1,'repairContent':'전원부 수리 A'},{'index':1,'qty':1,'repairContent':'팬 교체 B'}], mbRepairReport='공통 M/B 기록')
+        self.assertEqual(s['items'][0]['repairContent'],'전원부 수리 A')
+        self.assertEqual(s['items'][1]['repairContent'],'팬 교체 B')
+        s = self.post('/api/return-serials',{'id':s['id'],'version':s['version'],'eventIndex':0,'items':[{'index':0,'receivedSerial':'','repairContent':'정정된 수리 A'},{'index':1,'receivedSerial':''}]})
+        self.assertEqual(s['items'][0]['repairContent'],'정정된 수리 A')
+        self.assertEqual(s['items'][1]['repairContent'],'팬 교체 B')
+        s = self.ret(s, date='2026-10-21', items=[{'index':0,'qty':1,'repairContent':'추가 점검 A'},{'index':2,'qty':1,'repairContent':'정상 확인 C'}])
+        s['receiptEdits'] = [{'index':2-entry['index'],'eventIndex':event_index,'date':event['date'],'result':event.get('result',''),'qty':entry['qty'],'receivedSerial':entry.get('receivedSerial',''),'mbRepairReport':event.get('mbRepairReport',''),'repairContent':entry.get('repairContent','')} for event_index,event in enumerate(s['returns']) for entry in event['items']]
+        s['items'].reverse()
+        s = self.post('/api/slips',s)
+        self.assertEqual(len(s['returns']),2)
+        self.assertEqual(s['items'][2]['repairContent'],'정정된 수리 A\n추가 점검 A')
+        self.assertEqual(s['items'][1]['repairContent'],'팬 교체 B')
+        self.assertEqual(s['items'][0]['repairContent'],'정상 확인 C')
+        result = self.get('/api/slips/page?view=all&field=details&q='+urllib.parse.quote('정정된 수리'))
+        self.assertEqual(result['total'],1)
+        with zipfile.ZipFile(io.BytesIO(self.req('/api/export'))) as archive:
+            ns = {'s':'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            for name in ('xl/worksheets/sheet1.xml','xl/worksheets/sheet6.xml'):
+                rows=[[excel_text(cell,ns) for cell in row] for row in ET.fromstring(archive.read(name)).findall('s:sheetData/s:row',ns)]
+                column=rows[0].index('처리내용(수리내용)')
+                self.assertTrue(any('정정된 수리 A' in str(row[column]) for row in rows[1:]))
+
+    def test_per_item_repair_validation_and_older_editor_preserve_content(self):
+        s = self.create()
+        for value in (123,'X'*2001):
+            self.assert_error(400,'/api/returns',{'id':s['id'],'version':s['version'],'date':'2026-10-20','items':[{'index':0,'qty':1,'repairContent':value}]})
+        s = self.ret(s, items=[{'index':0,'qty':1,'repairContent':'보존할 수리내용'}])
+        s['note']='기존 API 수정'
+        s=self.post('/api/slips',s)
+        self.assertEqual(s['items'][0]['repairContent'],'보존할 수리내용')
+        s['receiptEdits']=[{'index':0,'eventIndex':0,'date':'2026-10-20','qty':1,'result':'','receivedSerial':''}]
+        s=self.post('/api/slips',s)
+        self.assertEqual(s['items'][0]['repairContent'],'보존할 수리내용')
+        s=self.post('/api/return-serials',{'id':s['id'],'version':s['version'],'eventIndex':0,'items':[{'index':0,'receivedSerial':'','repairContent':''}]})
+        self.assertEqual(s['items'][0]['repairContent'],'')
 
     def test_mb_report_partial_full_returns_history_correction_and_excel(self):
         s = self.create()

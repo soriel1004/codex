@@ -64,6 +64,8 @@ def validate_slip(body, id):
         app.valid_date(event['date'])
         if event['date'] < r['date']: raise ValueError('입고일이 출고일보다 빠릅니다.')
         for item in event['items']:
+            if not isinstance(item.get('repairContent',''),str) or len(item.get('repairContent','')) > 2000:
+                raise ValueError('품목별 처리내용(수리내용) 형식을 확인하세요.')
             if type(item['index']) is not int or not 0 <= item['index'] < len(r['items']) or type(item['qty']) is not int or item['qty'] <= 0:
                 raise ValueError('입고 수량과 품목을 확인하세요.')
     if any(i['remainingQty'] < 0 for i in r['items']): raise ValueError('입고수량이 출고수량을 초과합니다.')

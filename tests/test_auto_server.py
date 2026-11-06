@@ -251,7 +251,7 @@ class AutoProcesses(unittest.TestCase):
         self.request(first,'/api/suppliers/delete',removed)
         slip=self.request(first,'/api/slips',{'date':'2026-10-19','supplier':'자동 접속 업체','company':'우리 업체','status':'발송','kind':'AS 발송',
             'requesters':['GN'],'trackingNumber':'0000123456789','items':[{'name':'메인보드','serial':'000OUT','qrCodeNumber':'000QR','qty':2}]})
-        slip=self.request(first,'/api/returns',{'id':slip['id'],'version':slip['version'],'date':'2026-10-20','items':[{'index':0,'qty':1,'receivedSerial':'000IN'}],'mbRepairReport':'수리 내역'})
+        slip=self.request(first,'/api/returns',{'id':slip['id'],'version':slip['version'],'date':'2026-10-20','items':[{'index':0,'qty':1,'receivedSerial':'000IN','repairContent':'품목 수리내역'}],'mbRepairReport':'수리 내역'})
         follower,log=self.launch('PC2'); follower.wait(timeout=10)
         self.assertEqual(follower.returncode,0)
         self.assertFalse((Path(self.temp.name)/'PC2').exists())
@@ -262,6 +262,7 @@ class AutoProcesses(unittest.TestCase):
         self.assertEqual(restored['items'][0]['receivedSerial'],'000IN')
         self.assertEqual(restored['items'][0]['qrCodeNumber'],'000QR')
         self.assertEqual(restored['items'][0]['mbRepairReport'],'수리 내역')
+        self.assertEqual(restored['items'][0]['repairContent'],'품목 수리내역')
         restored['note']='PC2에서 수정'
         saved=self.request(second,'/api/slips',restored)
         pc2.kill(); pc2.wait(timeout=10)

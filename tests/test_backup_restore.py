@@ -66,7 +66,7 @@ class BackupRestore(unittest.TestCase):
     def test_roundtrip_every_record_catalog_setting_safety_backup_and_stale_edit_fence(self):
         self.request('/api/settings',{'company':'원래 보낸 업체','companyPhone':'010-9999-0000','manager':'담당자'})
         slip = self.create()
-        slip = self.request('/api/returns',{'id':slip['id'],'version':slip['version'],'date':'2026-10-20','result':'교환','mbRepairReport':'수리내역 보존','items':[{'index':0,'qty':1,'receivedSerial':'000IN'}]})
+        slip = self.request('/api/returns',{'id':slip['id'],'version':slip['version'],'date':'2026-10-20','result':'교환','mbRepairReport':'수리내역 보존','items':[{'index':0,'qty':1,'receivedSerial':'000IN','repairContent':'품목별 수리 보존'}]})
         self.request('/api/products',{'name':'등록 품명'})
         self.request('/api/receipt-options',{'name':'사용자 입고처리'})
         content = self.request('/api/backup')
@@ -87,6 +87,7 @@ class BackupRestore(unittest.TestCase):
         self.assertEqual(current['items'][0]['receivedSerial'],'000IN')
         self.assertEqual(current['items'][0]['qrCodeNumber'],'000QR')
         self.assertEqual(current['items'][0]['mbRepairReport'],'수리내역 보존')
+        self.assertEqual(current['items'][0]['repairContent'],'품목별 수리 보존')
         self.assertEqual(current['returns'],slip['returns'])
         self.assertEqual(self.request('/api/settings')['company'],'원래 보낸 업체')
         self.assertIn('사용자 입고처리',self.request('/api/receipt-options'))

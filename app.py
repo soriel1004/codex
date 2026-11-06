@@ -11,7 +11,7 @@ import storage
 import backup_restore
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '3.8.0'
+APP_VERSION = '3.9.0'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
@@ -67,6 +67,7 @@ def normalize(r):
         item['receivedSerial'] = '\n'.join(x.get('receivedSerial', '') for event in r['returns'] for x in event['items'] if x['index'] == i and x.get('receivedSerial'))
         item['mbRepairReport'] = '\n'.join(event['mbRepairReport'] for event in r['returns']
                                          if event.get('mbRepairReport') and any(x['index'] == i for x in event['items']))
+        item['repairContent'] = '\n'.join(x['repairContent'] for event in r['returns'] for x in event['items'] if x['index'] == i and x.get('repairContent'))
         item['returnedQty'] = sum(int(x['qty']) for event in r['returns'] for x in event['items'] if x['index'] == i)
         item['remainingQty'] = int(item['qty']) - item['returnedQty']
         received = [(index, event) for index, event in enumerate(r['returns']) if any(x['index'] == i for x in event['items'])]
@@ -158,6 +159,12 @@ def clean_mb_repair_report(value):
     return value.strip()
 
 
+def clean_repair_content(value):
+    if not isinstance(value,str) or len(value) > 2000:
+        raise ValueError('품목별 처리내용(수리내용)은 2000자 이내로 입력하세요.')
+    return value.strip()
+
+
 def update_return_serials(r, data, c=None):
     event_index = data.get('eventIndex')
     if type(event_index) is not int or not 0 <= event_index < len(r['returns']):
@@ -170,6 +177,7 @@ def update_return_serials(r, data, c=None):
     if any(type(i) is not int for i in indexes) or len(set(indexes)) != len(indexes) or set(indexes) != {x['index'] for x in event['items']}:
         raise ValueError('반환 이력의 품목이 일치하지 않습니다.')
     serials = {x['index']: clean_received_serial(x.get('receivedSerial', '')) for x in updates}
+    repairs = {x['index']: clean_repair_content(x['repairContent']) for x in updates if 'repairContent' in x}
     event['result'] = treatment
     if report:
         event['mbRepairReport'] = report
@@ -177,6 +185,9 @@ def update_return_serials(r, data, c=None):
         event.pop('mbRepairReport', None)
     for item in event['items']:
         item['receivedSerial'] = serials[item['index']]
+        if item['index'] in repairs:
+            if repairs[item['index']]: item['repairContent'] = repairs[item['index']]
+            else: item.pop('repairContent',None)
     r['version'] += 1
     return normalize(r)
 
@@ -200,7 +211,8 @@ def apply_return(r, data, c=None):
         if type(qty) is not int or qty < 1 or qty > r['items'][i]['remainingQty']:
             raise ValueError('반환 수량은 미반환 수량 이내의 정수여야 합니다.')
         serial = clean_received_serial(x.get('receivedSerial', ''))
-        seen.add(i); clean.append({'index': i, 'qty': qty, **({'receivedSerial': serial} if serial else {})})
+        repair = clean_repair_content(x.get('repairContent',''))
+        seen.add(i); clean.append({'index': i, 'qty': qty, **({'receivedSerial': serial} if serial else {}), **({'repairContent':repair} if repair else {})})
     r['returns'].append({'date': date, 'result': treatment, 'items': clean, **({'mbRepairReport':report} if report else {})})
     r['result'] = treatment
     r['version'] += 1
@@ -239,19 +251,23 @@ def editor_returns(old, data, items, c):
             previous_index = edit.get('eventIndex')
             previous = ''
             previous_report = ''
+            previous_repair = ''
             if previous_index is not None:
                 if type(previous_index) is not int or not 0 <= previous_index < len(old['returns']):
                     raise ValueError('입고내역의 원본 연결이 올바르지 않습니다.')
                 previous = old['returns'][previous_index].get('result', '')
                 previous_report = old['returns'][previous_index].get('mbRepairReport', '')
+                source_index = items[index].get('sourceIndex',index)
+                previous_repair = next((entry.get('repairContent','') for entry in old['returns'][previous_index]['items'] if entry['index'] == source_index),'')
             treatment = receipt_treatment(edit.get('result', ''), previous, c)
             serial = clean_received_serial(edit.get('receivedSerial', ''))
             report = clean_mb_repair_report(edit.get('mbRepairReport', previous_report))
+            repair = clean_repair_content(edit.get('repairContent',previous_repair))
             key = (previous_index if previous_index is not None else f'new-{order}', date, treatment, report)
             event = groups.setdefault(key, {'date':date, 'result':treatment, 'items':[], **({'mbRepairReport':report} if report else {})})
             if any(entry['index'] == index for entry in event['items']):
                 raise ValueError('같은 입고내역의 품목이 중복되었습니다.')
-            event['items'].append({'index':index, 'qty':qty, **({'receivedSerial':serial} if serial else {})})
+            event['items'].append({'index':index, 'qty':qty, **({'receivedSerial':serial} if serial else {}), **({'repairContent':repair} if repair else {})})
         # Preserve original chronological entry order when receipt cards are grouped by product.
         result = [event for key,event in sorted(groups.items(), key=lambda pair: (isinstance(pair[0][0],str), int(pair[0][0].split('-')[1]) if isinstance(pair[0][0],str) else pair[0][0]))]
     totals = [0] * len(items)
@@ -274,7 +290,7 @@ def xlsx(rows):
     headers = ['전표번호', '접수일 (출고일)', '출고월', '택배사', '출고 송장번호',
                '의뢰업체', '받는이', '보낸이', '품명', '생산 년월', '출고 시리얼번호',
                '입고 시리얼번호', '비고', 'M/B 수리내역서 작성', 'QR코드번호', '수량', '불량 증상', '구분', '진행상태',
-               '반환수량', '미반환수량', '경과일수', '입고처리', '입고일']
+               '반환수량', '미반환수량', '경과일수', '처리내용(수리내용)', '입고처리', '입고일']
     table = [headers]
     for r in rows:
         for item in r['items']:
@@ -284,7 +300,7 @@ def xlsx(rows):
                 r['supplier'], r.get('company', ''), item.get('name', ''), item.get('productionMonth', ''),
                 item.get('serial', ''), item.get('receivedSerial', ''), '\n'.join(v for v in (item.get('note', ''), r.get('note', '')) if v), item.get('mbRepairReport', ''), item.get('qrCodeNumber', ''), item.get('qty', 1),
                 item.get('fault', ''), r['kind'], status_label(r['status']), item['returnedQty'],
-                item['remainingQty'], item['elapsedDays'], item.get('receiptTreatment', ''), item.get('receivedDate', '')])
+                item['remainingQty'], item['elapsedDays'], item.get('repairContent',''), item.get('receiptTreatment', ''), item.get('receivedDate', '')])
     def col(i):
         s = ''
         while i:

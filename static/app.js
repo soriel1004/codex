@@ -409,7 +409,7 @@ $('#receiptDate').onchange = $('#receiptDate').oninput;
 function addEditorReceiptEntry(card, entry = {}, eventIndex = null) {
   const row = document.createElement('div'); row.className = 'editor-receipt-entry';
   row.dataset.eventIndex = eventIndex ?? '';
-  row.innerHTML = `<div class="form-grid"><label>입고일<input type="date" data-receipt-field="date" value="${esc(entry.date||today())}" required></label><label>입고수량<input type="number" min="1" max="99999" data-receipt-field="qty" value="${esc(entry.qty||1)}" required></label></div><label>변경된 입고 시리얼번호<textarea data-receipt-field="receivedSerial" maxlength="400" rows="3" placeholder="교환 시 입력 · 동일 제품은 빈칸">${esc(entry.receivedSerial||'')}</textarea></label><label class="mb-report-field">M/B 수리내역서 작성<textarea data-receipt-field="mbRepairReport" maxlength="2000" rows="3" placeholder="해당 입고내역의 M/B 수리 내용 (선택 사항)">${esc(entry.mbRepairReport||'')}</textarea></label><label>입고처리<select data-receipt-field="result">${receiptOptionsHtml(entry.result||'')}</select></label><button type="button" class="remove-receipt">입고내역 삭제</button>`;
+  row.innerHTML = `<div class="form-grid"><label>입고일<input type="date" data-receipt-field="date" value="${esc(entry.date||today())}" required></label><label>입고수량<input type="number" min="1" max="99999" data-receipt-field="qty" value="${esc(entry.qty||1)}" required></label></div><label>변경된 입고 시리얼번호<textarea data-receipt-field="receivedSerial" maxlength="400" rows="3" placeholder="교환 시 입력 · 동일 제품은 빈칸">${esc(entry.receivedSerial||'')}</textarea></label><label>처리내용(수리내용)<textarea data-receipt-field="repairContent" maxlength="2000" rows="3" placeholder="이 품목의 처리내용(수리내용)">${esc(entry.repairContent||'')}</textarea></label><label class="mb-report-field">M/B 수리내역서 작성<textarea data-receipt-field="mbRepairReport" maxlength="2000" rows="3" placeholder="해당 입고내역의 M/B 수리 내용 (선택 사항)">${esc(entry.mbRepairReport||'')}</textarea></label><label>입고처리<select data-receipt-field="result">${receiptOptionsHtml(entry.result||'')}</select></label><button type="button" class="remove-receipt">입고내역 삭제</button>`;
   row.querySelector('.remove-receipt').onclick = () => { row.remove(); syncEditorStatus(); };
   row.querySelector('[data-receipt-field=qty]').oninput = syncEditorStatus;
   row.querySelector('[data-receipt-field=date]').oninput = updateEditorElapsed;
@@ -489,7 +489,7 @@ $('#slipForm').onsubmit = async e => {
   data.items = itemRows.map(tr=>({...Object.fromEntries([...tr.querySelectorAll('[data-key]')].map(i=>[i.dataset.key,i.value])),sourceIndex:tr.dataset.sourceIndex === '' ? null : Number(tr.dataset.sourceIndex)}));
   if (editing) data.receiptEdits = itemRows.flatMap((tr,index)=>{
     const card=$('#editorReceiptSerialRows').querySelector(`[data-row-key="${tr.dataset.rowKey}"]`);
-    return [...card.querySelectorAll('.editor-receipt-entry')].map(row=>({index,eventIndex:row.dataset.eventIndex === '' ? null : Number(row.dataset.eventIndex),date:row.querySelector('[data-receipt-field=date]').value,qty:Number(row.querySelector('[data-receipt-field=qty]').value),result:row.querySelector('[data-receipt-field=result]').value,receivedSerial:row.querySelector('[data-receipt-field=receivedSerial]').value,mbRepairReport:row.querySelector('[data-receipt-field=mbRepairReport]').value}));
+    return [...card.querySelectorAll('.editor-receipt-entry')].map(row=>({index,eventIndex:row.dataset.eventIndex === '' ? null : Number(row.dataset.eventIndex),date:row.querySelector('[data-receipt-field=date]').value,qty:Number(row.querySelector('[data-receipt-field=qty]').value),result:row.querySelector('[data-receipt-field=result]').value,receivedSerial:row.querySelector('[data-receipt-field=receivedSerial]').value,repairContent:row.querySelector('[data-receipt-field=repairContent]').value,mbRepairReport:row.querySelector('[data-receipt-field=mbRepairReport]').value}));
   });
   if (!data.company) return toast('먼저 보낸이 설정에서 업체명을 입력하세요.');
   const btn = e.submitter; btn.disabled = true;
@@ -642,17 +642,18 @@ function openReturn(s, all = false) {
     const selected = all && i.remainingQty > 0;
     return `<tr data-index="${index}">
       <td><label class="return-item-choice"><input type="checkbox" aria-label="${esc(i.name)} 반환 선택" ${selected ? 'checked' : ''} ${!i.remainingQty || all ? 'disabled' : ''}><b>${esc(i.name)}</b></label>
-        <small>출고 시리얼: ${esc(i.serial||'—')}</small>
         <div class="return-counts">발송 ${i.qty} · 반환 완료 ${i.returnedQty} · <b>미반환 ${i.remainingQty}</b></div>
-        <label class="return-quantity">이번 반환 수량 <input type="number" aria-label="${esc(i.name)} 이번 반환 수량" min="1" max="${i.remainingQty}" value="${i.remainingQty||0}" ${selected ? '' : 'disabled'} ${all ? 'readonly' : ''}></label>
       </td>
+      <td class="return-outbound-serial">${esc(i.serial||'—')}</td>
+      <td class="return-qty-cell"><input type="number" aria-label="${esc(i.name)} 이번 반환 수량" min="1" max="${i.remainingQty}" value="${i.remainingQty||0}" ${selected ? '' : 'disabled'} ${all ? 'readonly' : ''}></td>
       <td class="return-serial-cell"><label class="serial-replacement-choice"><input type="checkbox" data-serial-replacement aria-label="${esc(i.name)} 시리얼 교체" ${i.remainingQty ? '' : 'disabled'}>시리얼 교체</label><div class="return-serial-entry" hidden><label>변경된 입고 시리얼번호<textarea class="received-serial" aria-label="${esc(i.name)} 입고 시리얼번호" maxlength="400" rows="3" placeholder="교체된 제품의 시리얼을 입력하세요" disabled></textarea></label><small>여러 개는 쉼표 또는 줄바꿈으로 구분하세요.</small></div></td>
+      <td class="return-repair-cell"><textarea data-item-repair class="item-repair-content" aria-label="${esc(i.name)} 처리내용(수리내용)" maxlength="2000" rows="3" placeholder="품목별 처리내용(수리내용)" ${i.remainingQty ? '' : 'disabled'}></textarea></td>
     </tr>`;
   }).join('');
   const syncSerialEntry = row => {
     const replacement = row.querySelector('[data-serial-replacement]');
     row.querySelector('.return-serial-entry').hidden = !replacement.checked;
-    row.querySelector('textarea').disabled = !replacement.checked;
+    row.querySelector('.received-serial').disabled = !replacement.checked;
     row.querySelector('.return-serial-cell').classList.toggle('serial-replacement-active',replacement.checked);
   };
   $('#returnItems').querySelectorAll('.return-item-choice input').forEach(c => c.onchange = () => {
@@ -665,11 +666,11 @@ function openReturn(s, all = false) {
       const row = c.closest('tr'), selected = row.querySelector('.return-item-choice input');
       if (c.checked && !selected.disabled) { selected.checked = true; selected.onchange(); }
       syncSerialEntry(row);
-      if (c.checked) row.querySelector('textarea').focus({preventScroll:true});
+      if (c.checked) row.querySelector('.received-serial').focus({preventScroll:true});
     };
     c.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); c.click(); } };
   });
-  // Typing a replacement serial also selects that row for a partial return.
+  // Typing a replacement serial or repair content selects that row for a partial return.
   $('#returnItems').querySelectorAll('textarea').forEach(input => input.oninput = () => {
     const row = input.closest('tr'), checkbox = row.querySelector('.return-item-choice input');
     if (!checkbox.disabled && input.value.trim()) { checkbox.checked = true; checkbox.onchange(); }
@@ -683,7 +684,7 @@ function openReturn(s, all = false) {
   if (!done) $('#returnItems [data-serial-replacement]:not(:disabled)')?.focus({preventScroll:true});
 }
 function renderReturnHistory(s) {
-  $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><b>${esc(event.date)}</b>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label>`).join('')}<label class="mb-report-field">M/B 수리내역서 작성<textarea data-history-report maxlength="2000" rows="3" placeholder="이 반환 이력의 M/B 수리 내용 (선택 사항)">${esc(event.mbRepairReport||'')}</textarea></label><div class="history-heading history-bottom"><label>입고처리<select data-history-result>${receiptOptionsHtml(event.result||'')}</select></label><span>입고일 ${esc(event.date)}</span><button type="button" data-save-serials="${eventIndex}">입고정보 저장</button></div></div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
+  $('#returnHistory').innerHTML = s.returns.map((event, eventIndex) => `<div class="serial-history" data-event="${eventIndex}"><b>${esc(event.date)}</b>${event.items.map(x => `<label>${esc(s.items[x.index].name)} · 반환 ${x.qty}개<textarea data-history-index="${x.index}" maxlength="400" rows="2" placeholder="교환된 제품의 입고 시리얼">${esc(x.receivedSerial||'')}</textarea></label><label>처리내용(수리내용)<textarea data-history-repair-index="${x.index}" maxlength="2000" rows="3" placeholder="이 품목의 수리내용">${esc(x.repairContent||'')}</textarea></label>`).join('')}<label class="mb-report-field">M/B 수리내역서 작성<textarea data-history-report maxlength="2000" rows="3" placeholder="이 반환 이력의 M/B 수리 내용 (선택 사항)">${esc(event.mbRepairReport||'')}</textarea></label><div class="history-heading history-bottom"><label>입고처리<select data-history-result>${receiptOptionsHtml(event.result||'')}</select></label><span>입고일 ${esc(event.date)}</span><button type="button" data-save-serials="${eventIndex}">입고정보 저장</button></div></div>`).join('') || '<p class="muted">아직 반환 이력이 없습니다.</p>';
 }
 $('#selectRemaining').onclick = () => {
   $('#returnItems').querySelectorAll('.return-item-choice input:not(:disabled)').forEach(c => {
@@ -697,7 +698,7 @@ async function saveReturn(s, data) {
 }
 $('#returnForm').onsubmit = async e => {
   e.preventDefault();
-  const items = [...$('#returnItems').querySelectorAll('tr')].filter(tr => tr.querySelector('.return-item-choice input').checked).map(tr => ({index:Number(tr.dataset.index), qty:Number(tr.querySelector('[type=number]').value), receivedSerial:tr.querySelector('[data-serial-replacement]').checked ? tr.querySelector('textarea').value : ''}));
+  const items = [...$('#returnItems').querySelectorAll('tr')].filter(tr => tr.querySelector('.return-item-choice input').checked).map(tr => ({index:Number(tr.dataset.index), qty:Number(tr.querySelector('[type=number]').value), receivedSerial:tr.querySelector('[data-serial-replacement]').checked ? tr.querySelector('.received-serial').value : '',repairContent:tr.querySelector('[data-item-repair]').value}));
   if (!items.length) return toast('반환할 품목을 선택하세요.');
   const btn = e.submitter; btn.disabled = true;
   try { await saveReturn(returning, {date:e.target.elements.date.value, result:e.target.elements.result.value, mbRepairReport:e.target.elements.mbRepairReport.value, items}); $('#returnDialog').close(); }
@@ -719,14 +720,16 @@ document.addEventListener('click', async e => {
   if (b.dataset.saveSerials !== undefined) {
     b.disabled = true;
     const event = b.closest('[data-event]');
-    const items = [...event.querySelectorAll('[data-history-index]')].map(input => ({index:Number(input.dataset.historyIndex),receivedSerial:input.value}));
+    const items = [...event.querySelectorAll('[data-history-index]')].map(input => ({index:Number(input.dataset.historyIndex),receivedSerial:input.value,repairContent:event.querySelector(`[data-history-repair-index="${input.dataset.historyIndex}"]`).value}));
     try {
       returning = await api('/api/return-serials', {id:returning.id,version:returning.version,eventIndex:Number(b.dataset.saveSerials),result:event.querySelector('[data-history-result]').value,mbRepairReport:event.querySelector('[data-history-report]').value,items});
       await reload();
       const saved = returning.returns[Number(b.dataset.saveSerials)];
       event.querySelector('[data-history-report]').value = saved.mbRepairReport || '';
       event.querySelectorAll('[data-history-index]').forEach(input => {
-        input.value = saved.items.find(x => x.index === Number(input.dataset.historyIndex)).receivedSerial || '';
+        const entry = saved.items.find(x => x.index === Number(input.dataset.historyIndex));
+        input.value = entry.receivedSerial || '';
+        event.querySelector(`[data-history-repair-index="${input.dataset.historyIndex}"]`).value = entry.repairContent || '';
       });
       b.disabled = false; toast('입고정보를 저장했습니다.');
     } catch (err) { toast(err.message); b.disabled = false; }
@@ -852,9 +855,9 @@ function openSlipDetail(s) {
   const events = (s.returns || []).map((event,index)=>({event,index})).sort((a,b)=>a.event.date.localeCompare(b.event.date)||a.index-b.index);
   const history = events.map(({event},index) => {
     const quantity = event.items.reduce((n,item)=>n+Number(item.qty),0); cumulative += quantity;
-    return `<section class="history-event"><div class="history-event-heading"><h3>${esc(event.date)} · ${cumulative >= sent ? '입고 완료' : '부분입고'}</h3><span>${index+1}차 입고 · ${quantity}개</span></div><p class="history-event-summary">입고처리: <b>${value(event.result)}</b> · 누적 ${cumulative} / ${sent}개 · 미입고 ${Math.max(0,sent-cumulative)}개</p><table class="history-receipt-table"><colgroup><col style="width:30%"><col style="width:12%"><col style="width:27%"><col style="width:31%"></colgroup><thead><tr><th>품명</th><th>입고수량</th><th>출고 시리얼</th><th>입고 시리얼</th></tr></thead><tbody>${event.items.map(entry=>{const item=s.items[entry.index];return `<tr><td>${value(item.name)}</td><td>${Number(entry.qty)}</td><td>${value(item.serial)}</td><td>${value(entry.receivedSerial)}</td></tr>`;}).join('')}</tbody></table>${event.mbRepairReport ? `<div class="history-repair"><h4>M/B 수리내역서 작성</h4><p>${esc(event.mbRepairReport)}</p></div>` : ''}</section>`;
+    return `<section class="history-event"><div class="history-event-heading"><h3>${esc(event.date)} · ${cumulative >= sent ? '입고 완료' : '부분입고'}</h3><span>${index+1}차 입고 · ${quantity}개</span></div><p class="history-event-summary">입고처리: <b>${value(event.result)}</b> · 누적 ${cumulative} / ${sent}개 · 미입고 ${Math.max(0,sent-cumulative)}개</p><table class="history-receipt-table"><colgroup><col style="width:30%"><col style="width:12%"><col style="width:27%"><col style="width:31%"></colgroup><thead><tr><th>품명</th><th>입고수량</th><th>출고 시리얼</th><th>입고 시리얼</th></tr></thead><tbody>${event.items.map(entry=>{const item=s.items[entry.index];return `<tr><td>${value(item.name)}</td><td>${Number(entry.qty)}</td><td>${value(item.serial)}</td><td>${value(entry.receivedSerial)}</td></tr>${entry.repairContent ? `<tr class="history-item-repair"><td colspan="4"><strong>${esc(item.name)} · 처리내용(수리내용)</strong><p>${esc(entry.repairContent)}</p></td></tr>` : ''}`;}).join('')}</tbody></table>${event.mbRepairReport ? `<div class="history-repair"><h4>M/B 수리내역서 작성</h4><p>${esc(event.mbRepairReport)}</p></div>` : ''}</section>`;
   }).join('');
-  $('#detailPaper').innerHTML = `<article class="history-report"><div class="history-report-title"><div><p>AS HISTORY</p><h1>AS 처리 이력서</h1><strong>${esc(s.number)}</strong></div><span>${esc(statusLabel(s.status))}</span></div><div class="history-totals"><div>발송<strong>${sent}개</strong></div><div>입고<strong>${received}개</strong></div><div>미입고<strong>${Math.max(0,sent-received)}개</strong></div><div>소요기간<strong>${value(s.elapsedDays)}일</strong></div></div><section class="history-section"><h2>전표 정보</h2><dl class="history-fields">${field('접수일 (출고일)',s.date)}${field('최종 입고일',s.returned)}${field('받는이',s.supplier)}${field('받는이 전화번호',s.phone)}${field('보낸이',s.company)}${field('보낸이 전화번호',s.companyPhone)}${field('담당자',s.manager)}${field('전표 구분',s.kind)}${field('의뢰업체',(s.requesters||[]).join(' · '))}${field('택배사',s.courier)}${field('출고 송장번호',s.trackingNumber)}${field('전표 비고',s.note)}</dl></section><section class="history-section"><h2>부품 내역</h2><div class="history-products">${s.items.map((item,index)=>`<section class="history-product"><h3>${index+1}. ${esc(item.name)}</h3><dl class="history-fields">${field('발송 / 입고 수량',`${item.qty} / ${item.returnedQty||0}개`)}${field('생산 년월',item.productionMonth)}${field('출고 시리얼번호',item.serial)}${field('입고 시리얼번호',item.receivedSerial)}${field('QR코드번호',item.qrCodeNumber)}${field('불량 증상',item.fault)}${field('품목 비고',item.note)}</dl></section>`).join('')}</div></section><section class="history-section"><h2>발송·입고 히스토리</h2><section class="history-event history-outbound"><div class="history-event-heading"><h3>${esc(s.date)} · 접수 / 출고</h3><span>${s.items.length}품목 · ${sent}개</span></div><p>${esc(s.supplier)}에 ${esc(s.kind)} · ${value(s.courier)} · 송장 ${value(s.trackingNumber)}</p></section>${history||'<p>입고 이력이 없습니다.</p>'}</section></article>`;
+  $('#detailPaper').innerHTML = `<article class="history-report"><div class="history-report-title"><div><p>AS HISTORY</p><h1>AS 처리 이력서</h1><strong>${esc(s.number)}</strong></div><span>${esc(statusLabel(s.status))}</span></div><div class="history-totals"><div>발송<strong>${sent}개</strong></div><div>입고<strong>${received}개</strong></div><div>미입고<strong>${Math.max(0,sent-received)}개</strong></div><div>소요기간<strong>${value(s.elapsedDays)}일</strong></div></div><section class="history-section"><h2>전표 정보</h2><dl class="history-fields">${field('접수일 (출고일)',s.date)}${field('최종 입고일',s.returned)}${field('받는이',s.supplier)}${field('받는이 전화번호',s.phone)}${field('보낸이',s.company)}${field('보낸이 전화번호',s.companyPhone)}${field('담당자',s.manager)}${field('전표 구분',s.kind)}${field('의뢰업체',(s.requesters||[]).join(' · '))}${field('택배사',s.courier)}${field('출고 송장번호',s.trackingNumber)}${field('전표 비고',s.note)}</dl></section><section class="history-section"><h2>부품 내역</h2><div class="history-products">${s.items.map((item,index)=>`<section class="history-product"><h3>${index+1}. ${esc(item.name)}</h3><dl class="history-fields">${field('발송 / 입고 수량',`${item.qty} / ${item.returnedQty||0}개`)}${field('생산 년월',item.productionMonth)}${field('출고 시리얼번호',item.serial)}${field('입고 시리얼번호',item.receivedSerial)}${field('QR코드번호',item.qrCodeNumber)}${field('불량 증상',item.fault)}${field('품목 비고',item.note)}${field('처리내용(수리내용)',item.repairContent)}</dl></section>`).join('')}</div></section><section class="history-section"><h2>발송·입고 히스토리</h2><section class="history-event history-outbound"><div class="history-event-heading"><h3>${esc(s.date)} · 접수 / 출고</h3><span>${s.items.length}품목 · ${sent}개</span></div><p>${esc(s.supplier)}에 ${esc(s.kind)} · ${value(s.courier)} · 송장 ${value(s.trackingNumber)}</p></section>${history||'<p>입고 이력이 없습니다.</p>'}</section></article>`;
   $('#detailDialog').showModal();
   $('#detailDialog').scrollTop = 0;
 }
@@ -864,7 +867,7 @@ function preview(s) {
     <div class="slip-title"><div><h1>AS 입출고 전표</h1><p>${esc(s.kind)} · ${esc(statusLabel(s.status))}</p></div><span>${label} 보관용</span></div>
     <div class="slip-meta"><strong>${esc(s.number)}</strong><span>${s.requesters?.length ? `의뢰업체 ${esc(s.requesters.join(' · '))} · ` : ''}접수일 (출고일) ${esc(s.date)}</span></div>
     <div class="parties">${party('받는이',s.supplier,s.phone)}${party('보낸이',s.company,s.companyPhone,s.manager)}</div>
-    <table class="print-table"><thead><tr><th>품명</th><th>출고 시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.serial||'')}</td><td>${esc(i.qty)}<br><small>반환 ${i.returnedQty}</small></td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>
+    <table class="print-table"><thead><tr><th>품명</th><th>출고 시리얼번호</th><th>수량</th><th>불량 증상</th></tr></thead><tbody>${s.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.serial||'')}</td><td>${esc(i.qty)}</td><td>${esc(i.fault)}</td></tr>`).join('')}</tbody></table>
     <div class="slip-result"><span>합계 수량 <b>${s.items.reduce((n,i)=>n+Number(i.qty),0)}</b></span></div>
     <div class="signatures"><span>인계자 __________________ (서명)</span><span>인수자 __________________ (서명)</span></div>
   </div></section>`;
