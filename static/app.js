@@ -461,12 +461,35 @@ function matchesManagementSearch(value, query) {
   const compact = q.replace(/[\s()-]/g, '');
   return text.includes(q) || (compact.length > 0 && text.replace(/[\s()-]/g, '').includes(compact));
 }
+const supplierNameOrder = new Intl.Collator('ko-KR', {numeric:true, sensitivity:'base'});
 function renderSuppliers() {
-  const filtered = suppliers.filter(s => matchesManagementSearch(`${s.name} ${s.phone}`, $('#supplierSearch').value));
+  const filtered = suppliers.filter(s => matchesManagementSearch(`${s.name} ${s.phone}`, $('#supplierSearch').value))
+    .sort((a,b) => supplierNameOrder.compare(a.name,b.name) || a.id-b.id);
   $('#supplierSearchCount').textContent = `${filtered.length} / ${suppliers.length}개`;
-  $('#supplierRows').innerHTML = filtered.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td><button data-supplier-edit="${s.id}">수정</button> <button data-supplier-delete="${s.id}" class="delete-button">삭제</button></td></tr>`).join('') ||
-    `<tr><td colspan="3">${suppliers.length ? '검색 결과가 없습니다.' : '등록된 받는이가 없습니다. 위에서 등록하세요.'}</td></tr>`;
+  const middle = Math.ceil(filtered.length/2);
+  $('#supplierRows').innerHTML = [filtered.slice(0,middle),filtered.slice(middle)].filter(group => group.length).map((group,index) =>
+    `<div class="table-wrap"><table aria-label="등록된 받는이 목록 ${index+1}"><colgroup><col style="width:43%"><col style="width:31%"><col style="width:26%"></colgroup><thead><tr><th>받는이 업체명</th><th>전화번호</th><th>관리</th></tr></thead><tbody>${group.map(s => `<tr><td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td><button data-supplier-edit="${s.id}">수정</button> <button data-supplier-delete="${s.id}" class="delete-button">삭제</button></td></tr>`).join('')}</tbody></table></div>`).join('') ||
+    `<p class="supplier-empty">${suppliers.length ? '검색 결과가 없습니다.' : '등록된 받는이가 없습니다. 위에서 등록하세요.'}</p>`;
 }
+async function openSupplierEditor(id) {
+  suppliers = await api('/api/suppliers'); renderSuppliers();
+  const supplier = suppliers.find(s => s.id === id);
+  if (!supplier) return toast('이미 삭제되었거나 없는 받는이입니다.');
+  const form = $('#supplierEditForm'); form.reset();
+  for (const key of ['id','name','phone']) form.elements[key].value = supplier[key];
+  $('#supplierEditError').textContent = '';
+  $('#supplierEditDialog').showModal();
+  form.elements.name.focus();
+}
+$('#supplierEditForm').onsubmit = async e => {
+  e.preventDefault(); const button = e.submitter; button.disabled = true;
+  try {
+    await api('/api/suppliers', Object.fromEntries(new FormData(e.target)));
+    suppliers = await api('/api/suppliers'); renderSuppliers(); await reload();
+    $('#supplierEditDialog').close(); toast('받는이 정보를 수정했습니다.');
+  } catch (error) { $('#supplierEditError').textContent = error.message; }
+  finally { button.disabled = false; }
+};
 $('#supplierSearch').oninput = renderSuppliers;
 $('#suppliersBtn').onclick = async () => {
   try { suppliers = await api('/api/suppliers'); } catch (error) { return toast(error.message); }
@@ -658,8 +681,10 @@ document.addEventListener('click', async e => {
     for (const [k,v] of Object.entries(product)) $('#productForm').elements.namedItem(k).value = v;
   }
   if (b.dataset.supplierEdit) {
-    const supplier = suppliers.find(s => s.id === Number(b.dataset.supplierEdit));
-    for (const [k,v] of Object.entries(supplier)) if ($('#supplierForm').elements.namedItem(k)) $('#supplierForm').elements.namedItem(k).value = v;
+    b.disabled = true;
+    try { await openSupplierEditor(Number(b.dataset.supplierEdit)); }
+    catch (error) { toast(error.message); }
+    finally { b.disabled = false; }
   }
   if (b.dataset.supplierDelete) {
     const supplier = suppliers.find(s => s.id === Number(b.dataset.supplierDelete));
