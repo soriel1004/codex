@@ -11,7 +11,7 @@ import storage
 import backup_restore
 
 ROOT = Path(__file__).resolve().parent
-APP_VERSION = '3.7.0'
+APP_VERSION = '3.7.1'
 DATA = Path(os.environ.get('AS_DATA_DIR', ROOT / 'data'))
 DEFAULT_RECEIPT_OPTIONS = ('수리', '교환', '정상 판정', '수리 불가', '반송', '기타')
 
