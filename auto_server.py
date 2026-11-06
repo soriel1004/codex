@@ -443,12 +443,24 @@ def client_url(root, timeout=90, try_claim=None):
     raise storage.SharedStoreError('기존 서버가 준비 중이거나 종료되지 않았습니다. 서버 PC를 확인하세요. 중복 서버를 강제로 만들지 않습니다.')
 
 
+def show_role(role):
+    import app
+    label = '서버 모드' if role == 'server' else '클라이언트 모드'
+    print('실행 모드:',label,flush=True)
+    if os.name == 'nt':
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleTitleW(f'AS 업무 V{app.APP_VERSION} · {label}')
+        except (OSError,AttributeError): pass
+
+
 def run(root, import_initial=None, local_base=None, open_browser=True):
     import app
     coordinator = SharedServer(root,local_base)
     if not coordinator.claim():
         url = client_url(root,try_claim=coordinator.claim)
         if url is not None:
+            show_role('client')
             print('기존 서버에 클라이언트로 접속:',url,flush=True)
             if open_browser and os.name == 'nt':
                 from desktop_session import DesktopSession
@@ -467,6 +479,7 @@ def run(root, import_initial=None, local_base=None, open_browser=True):
         port = int(os.environ.get('AS_AUTO_PORT','8000'))
         server = app.ThreadingHTTPServer(('0.0.0.0',port),app.Handler)
         coordinator.activate()
+        show_role('server')
         os.environ['AS_HOST']='0.0.0.0'
         os.environ['PORT']=str(server.server_port)
         os.environ['AS_BACKUP_DIR']=str(Path(root)/'backups')

@@ -31,6 +31,8 @@ const {once} = require('node:events');
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.goto(url);
     await page.locator('#slipList[aria-busy=false]').waitFor();
+    await page.locator('#programRole').filter({hasText:'서버 모드'}).waitFor();
+    assert.match(await page.title(),/서버 모드/);
     assert.ok((await page.locator('.stats article').first().boundingBox()).height <= 70);
     assert.equal(await page.locator('.stats article').count(), 4);
     assert.equal(await page.locator('.stats p').count(), 0);

@@ -61,6 +61,8 @@ desktop_session.DesktopSession.open_window = open_test_window
     const page = await browser.newPage(); const errors = [];
     page.on('pageerror',error=>errors.push(error.message));
     await page.goto(initial.url); await page.locator('#slipList[aria-busy=false]').waitFor();
+    await page.locator('#programRole').filter({hasText:'클라이언트 모드'}).waitFor();
+    assert.match(await page.title(),/클라이언트 모드/);
     const origin = new URL(initial.url).origin;
     const oldHealth = await (await page.request.get(origin+'/api/health')).json();
     assert.equal((await (await page.request.get(origin+'/api/program')).json()).server, false);
@@ -86,6 +88,8 @@ desktop_session.DesktopSession.open_window = open_test_window
     const restarted = await nextWindow(client,1);
     assert.notEqual(restarted.pid,initial.pid);
     await page.goto(restarted.url); await page.locator('#slipList[aria-busy=false]').waitFor();
+    await page.locator('#programRole').filter({hasText:'서버 모드'}).waitFor();
+    assert.match(await page.title(),/서버 모드/);
     const newOrigin = new URL(restarted.url).origin;
     assert.equal((await (await page.request.get(newOrigin+'/api/program')).json()).server,true);
     const health = await (await page.request.get(newOrigin+'/api/health')).json();

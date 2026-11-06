@@ -252,6 +252,7 @@ function elapsedIndicator(s) {
   return `<span class="elapsed-days elapsed-band-${band}" title="${['0~7일','8~14일','15~21일','22일 이상'][band]}">${label}</span>`;
 }
 function slipActions(s) {
+  if (s.status === '반환완료') return `<div class="row-action-buttons"><div class="action-row"><button class="detail-button" data-detail="${s.id}" title="발송·입고 이력 상세"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h7l3 3V14H3zM10 1.5V5h3M5.5 8h5M5.5 11h5"></path></svg>상세</button><button data-edit="${s.id}">수정</button><button data-delete="${s.id}" class="delete-button">삭제</button></div></div>`;
   return `<div class="row-action-buttons">${s.status !== '반환완료' ? `<div class="action-row"><button data-return="${s.id}" class="return-button">부분완료</button><button data-return-all="${s.id}" title="입고 시리얼을 입력한 뒤 남은 수량 전체를 반환 처리">완료</button></div>` : ''}<div class="action-row"><button data-edit="${s.id}">수정</button><button data-print="${s.id}">전표 출력</button><button data-delete="${s.id}" class="delete-button">삭제</button></div></div>`;
 }
 function openDelete(s) {
@@ -734,12 +735,13 @@ document.addEventListener('click', async e => {
   if (b.dataset.view) { view = b.dataset.view; $('#statusFilter').value = ''; updateList(); }
   if (b.dataset.print) preview(slips.find(s => s.id === Number(b.dataset.print)));
   if (b.dataset.track) openTracking(slips.find(s => s.id === Number(b.dataset.track)));
-  const action = ['edit','delete','return','returnAll'].find(key => b.dataset[key]);
+  const action = ['detail','edit','delete','return','returnAll'].find(key => b.dataset[key]);
   if (action) {
     b.disabled = true;
     try {
-      const [slip] = await Promise.all([api('/api/slips/' + b.dataset[action]), action === 'delete' ? Promise.resolve() : refreshMasters()]);
-      if (action === 'edit') openEditor(slip);
+      const [slip] = await Promise.all([api('/api/slips/' + b.dataset[action]), ['delete','detail'].includes(action) ? Promise.resolve() : refreshMasters()]);
+      if (action === 'detail') openSlipDetail(slip);
+      else if (action === 'edit') openEditor(slip);
       else if (action === 'delete') openDelete(slip);
       else openReturn(slip, action === 'returnAll');
     } catch (error) { toast(error.message); reload().catch(() => {}); }
@@ -816,9 +818,17 @@ function fitSlips(root) {
     apply(low);
   });
 }
+function clearPrintRoot() {
+  const root = $('#print-root');
+  if (root) { root.replaceChildren(); root.classList.remove('history-print'); }
+}
+$('#detailDialog').addEventListener('close',clearPrintRoot);
+$('#preview').addEventListener('close',clearPrintRoot);
 function preparePrint() {
-  const paper = $('#paper');
-  if (!paper.children.length) return false;
+  const history = $('#detailDialog').open;
+  if (!history && !$('#preview').open) { clearPrintRoot(); return false; }
+  const paper = history ? $('#detailPaper') : $('#paper');
+  if (!paper.children.length) { clearPrintRoot(); return false; }
   let root = $('#print-root');
   if (!root) {
     root = document.createElement('div');
@@ -826,12 +836,27 @@ function preparePrint() {
     root.setAttribute('aria-hidden', 'true');
     document.body.append(root);
   }
+  root.classList.toggle('history-print',history);
   root.innerHTML = paper.innerHTML;
   // Measure at the same width even before the browser enters print media.
   root.style.display = 'block';
-  fitSlips(root);
+  if (!history) fitSlips(root);
   root.style.removeProperty('display');
   return true;
+}
+function openSlipDetail(s) {
+  const value = v => esc(v === '' || v == null ? '—' : v);
+  const field = (title,v) => `<div><dt>${esc(title)}</dt><dd>${value(v)}</dd></div>`;
+  const sent = total(s,'qty'), received = total(s,'returnedQty');
+  let cumulative = 0;
+  const events = (s.returns || []).map((event,index)=>({event,index})).sort((a,b)=>a.event.date.localeCompare(b.event.date)||a.index-b.index);
+  const history = events.map(({event},index) => {
+    const quantity = event.items.reduce((n,item)=>n+Number(item.qty),0); cumulative += quantity;
+    return `<section class="history-event"><div class="history-event-heading"><h3>${esc(event.date)} · ${cumulative >= sent ? '입고 완료' : '부분입고'}</h3><span>${index+1}차 입고 · ${quantity}개</span></div><p class="history-event-summary">입고처리: <b>${value(event.result)}</b> · 누적 ${cumulative} / ${sent}개 · 미입고 ${Math.max(0,sent-cumulative)}개</p><table class="history-receipt-table"><colgroup><col style="width:30%"><col style="width:12%"><col style="width:27%"><col style="width:31%"></colgroup><thead><tr><th>품명</th><th>입고수량</th><th>출고 시리얼</th><th>입고 시리얼</th></tr></thead><tbody>${event.items.map(entry=>{const item=s.items[entry.index];return `<tr><td>${value(item.name)}</td><td>${Number(entry.qty)}</td><td>${value(item.serial)}</td><td>${value(entry.receivedSerial)}</td></tr>`;}).join('')}</tbody></table>${event.mbRepairReport ? `<div class="history-repair"><h4>M/B 수리내역서 작성</h4><p>${esc(event.mbRepairReport)}</p></div>` : ''}</section>`;
+  }).join('');
+  $('#detailPaper').innerHTML = `<article class="history-report"><div class="history-report-title"><div><p>AS HISTORY</p><h1>AS 처리 이력서</h1><strong>${esc(s.number)}</strong></div><span>${esc(statusLabel(s.status))}</span></div><div class="history-totals"><div>발송<strong>${sent}개</strong></div><div>입고<strong>${received}개</strong></div><div>미입고<strong>${Math.max(0,sent-received)}개</strong></div><div>소요기간<strong>${value(s.elapsedDays)}일</strong></div></div><section class="history-section"><h2>전표 정보</h2><dl class="history-fields">${field('접수일 (출고일)',s.date)}${field('최종 입고일',s.returned)}${field('받는이',s.supplier)}${field('받는이 전화번호',s.phone)}${field('보낸이',s.company)}${field('보낸이 전화번호',s.companyPhone)}${field('담당자',s.manager)}${field('전표 구분',s.kind)}${field('의뢰업체',(s.requesters||[]).join(' · '))}${field('택배사',s.courier)}${field('출고 송장번호',s.trackingNumber)}${field('전표 비고',s.note)}</dl></section><section class="history-section"><h2>부품 내역</h2><div class="history-products">${s.items.map((item,index)=>`<section class="history-product"><h3>${index+1}. ${esc(item.name)}</h3><dl class="history-fields">${field('발송 / 입고 수량',`${item.qty} / ${item.returnedQty||0}개`)}${field('생산 년월',item.productionMonth)}${field('출고 시리얼번호',item.serial)}${field('입고 시리얼번호',item.receivedSerial)}${field('QR코드번호',item.qrCodeNumber)}${field('불량 증상',item.fault)}${field('품목 비고',item.note)}</dl></section>`).join('')}</div></section><section class="history-section"><h2>발송·입고 히스토리</h2><section class="history-event history-outbound"><div class="history-event-heading"><h3>${esc(s.date)} · 접수 / 출고</h3><span>${s.items.length}품목 · ${sent}개</span></div><p>${esc(s.supplier)}에 ${esc(s.kind)} · ${value(s.courier)} · 송장 ${value(s.trackingNumber)}</p></section>${history||'<p>입고 이력이 없습니다.</p>'}</section></article>`;
+  $('#detailDialog').showModal();
+  $('#detailDialog').scrollTop = 0;
 }
 function preview(s) {
   const party = (title, company, phone, manager = '') => `<div class="party"><b>${title}</b><div><strong>${esc(company||'—')}</strong><p>전화번호 ${esc(phone||'—')}</p>${manager ? `<p>담당자 ${esc(manager)}</p>` : ''}</div></div>`;
@@ -853,6 +878,10 @@ $('#printBtn').onclick = async () => {
   await document.fonts.ready;
   if (preparePrint()) window.print();
 };
+$('#historyPrintBtn').onclick = async () => {
+  await document.fonts.ready;
+  if (preparePrint()) window.print();
+};
 function initializeApp() {
   if (initializationTask) return initializationTask;
   initializationTask = (async () => {
@@ -864,7 +893,16 @@ function initializeApp() {
   })();
   return initializationTask;
 }
-api('/api/program').then(info => { programInfo = info; if (connectionLost) openDisconnectionDialog(); }).catch(() => {});
+api('/api/program').then(info => {
+  programInfo = info;
+  if (info.canExit) {
+    $('#programRole').textContent = info.server ? '서버 모드' : '클라이언트 모드';
+    $('#programRole').classList.toggle('client-mode',!info.server);
+    $('#programRole').hidden = false;
+    document.title = 'AS 업무 · ' + $('#programRole').textContent;
+  }
+  if (connectionLost) openDisconnectionDialog();
+}).catch(() => {});
 checkServerConnection();
 setInterval(checkServerConnection, 5000);
 window.addEventListener('online', checkServerConnection);

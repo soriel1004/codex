@@ -555,7 +555,15 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.ok(!(await page.locator('#rows').innerText()).includes('시리얼 변경'));
     assert.equal(await page.locator('#rows [data-return],#rows [data-return-all]').count(),0);
     assert.equal(await page.locator('#rows .tracking-link').count(),0);
-    assert.deepEqual(await page.locator('#rows .row-actions button').allTextContents(),['수정','전표 출력','삭제']);
+    assert.deepEqual(await page.locator('#rows .row-actions button').allTextContents(),['상세','수정','삭제']);
+    assert.equal(await page.locator('#rows [data-print]').count(),0);
+    await page.locator('#rows [data-detail]').click();
+    await page.locator('#detailDialog').waitFor({state:'visible'});
+    assert.equal(await page.locator('#detailPaper .history-event').count(),3);
+    assert.match(await page.locator('#detailPaper').innerText(),/000CORRECTED/);
+    assert.match(await page.locator('#detailPaper').innerText(),/전량 수리내역/);
+    assert.equal(await page.locator('#detailPaper input,#detailPaper textarea').count(),0);
+    await page.locator('[data-close=detailDialog]').click();
     await page.locator('#rows [data-edit]').click();
     await page.locator('#editor').waitFor({state:'visible'});
     assert.equal(await page.locator('#slipForm [name=status] option:checked').innerText(),'완료');
@@ -612,10 +620,11 @@ const {spawn, execFileSync} = require('node:child_process');
     assert.equal(fullyEdited[0].elapsedDays,3);
     assert.equal(fullyEdited[0].items[0].mbRepairReport,'수정 수리내역\n전량 수리내역');
     assert.equal(await page.locator('#rows .serial-changes').count(),0);
-    await page.locator('#rows [data-print]').click();
-    assert.ok(!(await page.locator('#paper').innerText()).includes('EDITED-NEW'));
-    assert.match(await page.locator('#paper').innerText(),/OUT-EDIT/);
-    await page.locator('[data-close=preview]').click();
+    await page.locator('#rows [data-detail]').click();
+    await page.locator('#detailDialog').waitFor({state:'visible'});
+    assert.match(await page.locator('#detailPaper').innerText(),/EDITED-NEW/);
+    assert.match(await page.locator('#detailPaper').innerText(),/OUT-EDIT/);
+    await page.locator('[data-close=detailDialog]').click();
     // Completed-list comparison handles unchanged batches, missing numbers,
     // changes on later items, and HTML-like serial text without changing records.
     const serialCases=[
